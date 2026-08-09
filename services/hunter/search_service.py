@@ -5,205 +5,237 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import User
-
 from services.hunter.engine import (
     HunterEngine,
     HunterResult,
 )
-
-from services.hunter.limits import (
+from services.search_limits import (
     can_search,
-    consume_search,
-    get_remaining_daily_searches,
-    reset_daily_counter_if_needed,
+    register_successful_search,
+    get_remaining_searches,
 )
 
 
 @dataclass(frozen=True)
-class SearchResult:
+class HunterSearchResponse:
     success: bool
     message: str
-
     results: list[HunterResult]
 
-    consumed_search: bool = False
-    remaining_searches: int | None = None
 
-
-class SearchService:
+class HunterSearchService:
 
     def __init__(
         self,
-        hunter: HunterEngine,
+        engine: HunterEngine,
     ) -> None:
 
-        self.hunter = hunter
+        self.engine = engine
+
+    # =====================================================
+    # SEARCH
+    # =====================================================
 
     async def search(
         self,
         session: AsyncSession,
         user: User,
         length: int,
-        amount: int = 10,
-    ) -> SearchResult:
+        amount: int = 1,
+    ) -> HunterSearchResponse:
 
-        # =================================================
-        # USER BLOCK
-        # =================================================
+        # -------------------------------------------------
+        # BLOCKED
+        # -------------------------------------------------
 
         if user.is_blocked:
 
-            return SearchResult(
+            return HunterSearchResponse(
                 success=False,
                 message=(
-                    "⛔ <b>Твой аккаунт заблокирован.</b>\n\n"
-                    "Использование поиска недоступно."
+                    "⛔ <b>Доступ запрещён.</b>\n\n"
+                    "Твой аккаунт заблокирован."
                 ),
                 results=[],
             )
 
-        # =================================================
-        # RESET DAILY COUNTER
-        # =================================================
-
-        reset_daily_counter_if_needed(user)
-
-        # =================================================
-        # LIMIT CHECK
-        # =================================================
-
-        if not can_search(user):
-
-            return SearchResult(
-                success=False,
-                message=(
-                    "🚫 <b>Лимит поиска на сегодня исчерпан.</b>\n\n"
-                    "Бесплатный лимит: "
-                    "<b>5 поисков в день</b>.\n\n"
-                    "💎 TEYZUS Premium снимает "
-                    "дневной лимит."
-                ),
-                results=[],
-                remaining_searches=0,
-            )
-
-        # =================================================
-        # VALIDATION
-        # =================================================
-
-        if length < 5 or length > 32:
-
-            return SearchResult(
-                success=False,
-                message=(
-                    "❌ Некорректная длина username.\n\n"
-                    "Допустимо: <b>5–32</b> символа."
-                ),
-                results=[],
-            )
+        # -------------------------------------------------
+        # AMOUNT VALIDATION
+        # -------------------------------------------------
 
         if amount < 1:
 
-            return SearchResult(
+            amount = 1
+
+        if amount > 100:
+
+            amount = 100
+
+        # -------------------------------------------------
+        # LENGTH VALIDATION
+        # -------------------------------------------------
+
+        if length < 5 or length > 32:
+
+            return HunterSearchResponse(
                 success=False,
                 message=(
-                    "❌ Количество результатов "
-                    "должно быть больше 0."
+                    "❌ Недопустимая длина username.\n\n"
+                    "Разрешено: от 5 до 32 символов."
                 ),
                 results=[],
             )
 
-        amount = min(
-            amount,
-            100,
+        # -------------------------------------------------
+        # PREMIUM / FREE
+        # -------------------------------------------------
+
+        from services.premium import is_premium
+
+        premium = is_premium(user)
+
+        # -------------------------------------------------
+        # 5 SYMBOLS — PREMIUM
+        # -------------------------------------------------
+
+        if length == 5 and not premium:
+
+            return HunterSearchResponse(
+                success=False,
+                message=(
+                    "💎 <b>Пятисимвольный поиск</b>\n\n"
+                    "Username длиной 5 символов "
+                    "доступны только Premium пользователям."
+                ),
+                results=[],
+            )
+
+        # -------------------------------------------------
+        # CHECK LIMIT
+        # -------------------------------------------------
+
+        allowed = await can_search(
+            session=session,
+            user=user,
         )
 
-        # =================================================
-        # HUNTER
-        # =================================================
+        if not allowed:
+
+            remaining = await get_remaining_searches(
+                session=session,
+                user=user,
+            )
+
+            remaining_text = (
+                str(remaining)
+                if remaining is not None
+                else "∞"
+            )
+
+            return HunterSearchResponse(
+                success=False,
+                message=(
+                    "🚫 <b>Дневной лимит поиска исчерпан.</b>\n\n"
+                    f"Осталось поисков: <b>{remaining_text}</b>\n\n"
+                    "💎 Premium открывает безлимитный поиск."
+                ),
+                results=[],
+            )
+
+        # -------------------------------------------------
+        # SEARCH
+        # -------------------------------------------------
 
         try:
 
-            results = await self.hunter.search(
+            results = await self.engine.search(
                 length=length,
                 amount=amount,
             )
 
         except Exception:
 
-            return SearchResult(
+            return HunterSearchResponse(
                 success=False,
                 message=(
-                    "⚠️ <b>Ошибка Hunter Engine.</b>\n\n"
-                    "Попробуй повторить поиск позже."
+                    "⚠️ <b>Ошибка поиска.</b>\n\n"
+                    "Попробуй повторить поиск немного позже."
                 ),
                 results=[],
             )
 
-        # =================================================
-        # NO RESULTS
-        # =================================================
+        # -------------------------------------------------
+        # NOTHING FOUND
+        # -------------------------------------------------
 
         if not results:
 
-            return SearchResult(
+            return HunterSearchResponse(
                 success=False,
                 message=(
-                    "😔 Подходящих доступных "
-                    "username не найдено."
+                    "😔 <b>Ничего не найдено.</b>\n\n"
+                    "Попробуй другую длину или другой режим поиска."
                 ),
                 results=[],
-                remaining_searches=(
-                    get_remaining_daily_searches(
-                        user
-                    )
-                ),
             )
 
-        # =================================================
-        # CONSUME SEARCH
-        # =================================================
+        # -------------------------------------------------
+        # SUCCESS
+        # -------------------------------------------------
 
-        consumed = consume_search(
-            user
+        registered = await register_successful_search(
+            session=session,
+            user=user,
         )
 
-        if not consumed:
+        if not registered:
 
-            return SearchResult(
+            return HunterSearchResponse(
                 success=False,
                 message=(
-                    "🚫 <b>Лимит поиска исчерпан.</b>"
+                    "🚫 <b>Лимит поиска исчерпан.</b>\n\n"
+                    "Попробуй снова завтра "
+                    "или активируй Premium."
                 ),
                 results=[],
-                remaining_searches=0,
             )
 
-        # =================================================
-        # SAVE USER
-        # =================================================
+        # -------------------------------------------------
+        # RESULT MESSAGE
+        # -------------------------------------------------
 
-        await session.commit()
-
-        remaining = (
-            get_remaining_daily_searches(
-                user
-            )
+        remaining = await get_remaining_searches(
+            session=session,
+            user=user,
         )
 
-        return SearchResult(
+        if remaining is None:
+
+            limit_text = (
+                "💎 Premium • ♾️ безлимит"
+            )
+
+        else:
+
+            limit_text = (
+                f"🔎 Осталось сегодня: "
+                f"<b>{remaining}</b>"
+            )
+
+        return HunterSearchResponse(
             success=True,
             message=(
-                "✅ <b>Поиск завершён.</b>"
+                "✅ <b>Поиск завершён!</b>\n\n"
+                f"{limit_text}"
             ),
             results=results,
-            consumed_search=True,
-            remaining_searches=remaining,
         )
 
 
-hunter_engine = HunterEngine()
+# =========================================================
+# SINGLETON
+# =========================================================
 
-search_service = SearchService(
-    hunter=hunter_engine
+hunter_search_service = HunterSearchService(
+    engine=HunterEngine()
 )
