@@ -1,0 +1,661 @@
+/* =========================================================
+   TEYZUS SHOP
+   ========================================================= */
+
+.shop-page {
+  padding-bottom: 10px;
+}
+
+.shop-top {
+  display: flex;
+
+  align-items: flex-start;
+  justify-content: space-between;
+
+  margin-bottom: 4px;
+}
+
+.shop-search {
+  display: flex;
+
+  gap: 8px;
+
+  margin-top: 12px;
+}
+
+.shop-search-input {
+  display: flex;
+
+  flex: 1;
+
+  align-items: center;
+
+  gap: 8px;
+
+  height: 48px;
+
+  padding:
+    0 13px;
+
+  border:
+    1px solid
+    var(--border);
+
+  border-radius: 15px;
+
+  background:
+    var(--card);
+}
+
+.shop-search-input span {
+  font-size: 16px;
+}
+
+.shop-search-input input {
+  width: 100%;
+
+  min-width: 0;
+
+  border: 0;
+
+  outline: 0;
+
+  background: transparent;
+
+  color: var(--text);
+
+  font-size: 14px;
+}
+
+.shop-search-input input::placeholder {
+  color: var(--muted);
+}
+
+.clear-search {
+  width: 25px;
+  height: 25px;
+
+  border-radius: 50%;
+
+  color: var(--muted);
+
+  background:
+    rgba(
+      255,
+      255,
+      255,
+      0.06
+    );
+
+  font-size: 18px;
+}
+
+.shop-search-button {
+  height: 48px;
+
+  padding:
+    0 16px;
+
+  border-radius: 15px;
+
+  background:
+    var(--blue);
+
+  color: white;
+
+  font-size: 13px;
+
+  font-weight: 700;
+}
+
+.shop-categories {
+  display: flex;
+
+  gap: 8px;
+
+  overflow-x: auto;
+
+  padding:
+    12px 0 4px;
+
+  scrollbar-width: none;
+}
+
+.shop-categories::-webkit-scrollbar {
+  display: none;
+}
+
+.shop-category {
+  flex:
+    0 0 auto;
+
+  padding:
+    9px 13px;
+
+  border:
+    1px solid
+    var(--border);
+
+  border-radius: 12px;
+
+  background:
+    rgba(
+      12,
+      32,
+      53,
+      0.75
+    );
+
+  color:
+    var(--muted);
+
+  font-size: 12px;
+
+  white-space: nowrap;
+}
+
+.shop-category.active {
+  border-color:
+    rgba(
+      53,
+      169,
+      255,
+      0.5
+    );
+
+  background:
+    rgba(
+      53,
+      169,
+      255,
+      0.13
+    );
+
+  color:
+    var(--blue-light);
+}
+
+.shop-toolbar {
+  display: flex;
+
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 10px;
+
+  margin:
+    14px 0 10px;
+
+  color:
+    var(--muted);
+
+  font-size: 12px;
+}
+
+.shop-toolbar select {
+  padding:
+    7px 9px;
+
+  border:
+    1px solid
+    var(--border);
+
+  border-radius: 10px;
+
+  outline: 0;
+
+  background:
+    var(--card);
+
+  color:
+    var(--text);
+
+  font-size: 12px;
+}
+
+.shop-list {
+  display: flex;
+
+  flex-direction: column;
+
+  gap: 10px;
+}
+
+.shop-listing {
+  display: flex;
+
+  gap: 12px;
+
+  justify-content: space-between;
+
+  padding: 15px;
+
+  border:
+    1px solid
+    var(--border);
+
+  border-radius: 19px;
+
+  background:
+    var(--card);
+
+  box-shadow:
+    0 8px 24px
+      rgba(
+        0,
+        0,
+        0,
+        0.1
+      );
+}
+
+.shop-listing-main {
+  min-width: 0;
+
+  flex: 1;
+}
+
+.shop-listing-username {
+  overflow: hidden;
+
+  text-overflow: ellipsis;
+
+  white-space: nowrap;
+
+  color:
+    var(--blue-light);
+
+  font-size: 17px;
+
+  font-weight: 800;
+}
+
+.shop-listing-meta {
+  display: flex;
+
+  flex-wrap: wrap;
+
+  gap: 6px;
+
+  margin-top: 7px;
+}
+
+.shop-listing-meta span {
+  padding:
+    4px 7px;
+
+  border-radius: 7px;
+
+  background:
+    rgba(
+      53,
+      169,
+      255,
+      0.08
+    );
+
+  color:
+    var(--muted);
+
+  font-size: 9px;
+}
+
+.shop-listing-main p {
+  margin:
+    9px 0 0;
+
+  color:
+    var(--muted);
+
+  font-size: 12px;
+
+  line-height: 1.4;
+}
+
+.shop-listing-seller {
+  margin-top: 10px;
+
+  color:
+    #70879d;
+
+  font-size: 10px;
+}
+
+.shop-listing-right {
+  display: flex;
+
+  min-width: 105px;
+
+  flex-direction: column;
+
+  align-items: flex-end;
+
+  gap: 6px;
+}
+
+.favorite-button {
+  width: 30px;
+  height: 30px;
+
+  border-radius: 10px;
+
+  background:
+    rgba(
+      255,
+      255,
+      255,
+      0.05
+    );
+
+  font-size: 15px;
+}
+
+.shop-price {
+  color:
+    var(--text);
+
+  font-size: 15px;
+
+  font-weight: 800;
+
+  white-space: nowrap;
+}
+
+.shop-stars {
+  color:
+    var(--yellow);
+
+  font-size: 10px;
+
+  white-space: nowrap;
+}
+
+.shop-open-button {
+  margin-top: auto;
+
+  padding:
+    8px 10px;
+
+  border-radius: 10px;
+
+  background:
+    rgba(
+      53,
+      169,
+      255,
+      0.12
+    );
+
+  color:
+    var(--blue-light);
+
+  font-size: 10px;
+
+  font-weight: 700;
+}
+
+.shop-bottom-menu {
+  display: grid;
+
+  grid-template-columns:
+    repeat(4, 1fr);
+
+  gap: 8px;
+
+  margin-top: 14px;
+}
+
+.shop-bottom-menu button {
+  display: flex;
+
+  min-height: 62px;
+
+  flex-direction: column;
+
+  align-items: center;
+  justify-content: center;
+
+  gap: 4px;
+
+  border:
+    1px solid
+    var(--border);
+
+  border-radius: 14px;
+
+  background:
+    var(--card);
+
+  color:
+    var(--text);
+
+  font-size: 17px;
+}
+
+.shop-bottom-menu span {
+  color:
+    var(--muted);
+
+  font-size: 9px;
+}
+
+/* =========================================================
+   EMPTY STATE
+   ========================================================= */
+
+.empty-state {
+  display: flex;
+
+  min-height: 180px;
+
+  flex-direction: column;
+
+  align-items: center;
+  justify-content: center;
+
+  gap: 8px;
+
+  padding: 24px;
+
+  text-align: center;
+
+  border:
+    1px solid
+    var(--border);
+
+  border-radius: 20px;
+
+  background:
+    var(--card);
+}
+
+.empty-icon {
+  margin-bottom: 5px;
+
+  font-size: 36px;
+}
+
+.empty-state strong {
+  font-size: 15px;
+}
+
+.empty-state p {
+  max-width: 290px;
+
+  margin: 0;
+
+  color:
+    var(--muted);
+
+  font-size: 12px;
+
+  line-height: 1.45;
+}
+
+/* =========================================================
+   BOTTOM NAVIGATION
+   ========================================================= */
+
+.bottom-nav {
+  position: fixed;
+
+  z-index: 100;
+
+  left: 50%;
+  bottom: 0;
+
+  width: 100%;
+  max-width: 720px;
+
+  height:
+    var(--nav-height);
+
+  transform:
+    translateX(-50%);
+
+  display: grid;
+
+  grid-template-columns:
+    repeat(5, 1fr);
+
+  padding:
+    7px
+    8px
+    calc(
+      7px +
+      env(
+        safe-area-inset-bottom
+      )
+    );
+
+  border-top:
+    1px solid
+    rgba(
+      100,
+      190,
+      255,
+      0.13
+    );
+
+  background:
+    rgba(
+      5,
+      17,
+      31,
+      0.94
+    );
+
+  backdrop-filter:
+    blur(20px);
+
+  -webkit-backdrop-filter:
+    blur(20px);
+}
+
+.bottom-nav-item {
+  display: flex;
+
+  min-width: 0;
+
+  flex-direction: column;
+
+  align-items: center;
+  justify-content: center;
+
+  gap: 3px;
+
+  border-radius: 13px;
+
+  background:
+    transparent;
+
+  color:
+    #6f879c;
+
+  transition:
+    0.15s ease;
+}
+
+.bottom-nav-item.active {
+  background:
+    rgba(
+      53,
+      169,
+      255,
+      0.11
+    );
+
+  color:
+    var(--blue-light);
+}
+
+.bottom-nav-icon {
+  font-size: 18px;
+
+  line-height: 1;
+}
+
+.bottom-nav-title {
+  overflow: hidden;
+
+  max-width: 100%;
+
+  padding:
+    0 2px;
+
+  text-overflow: ellipsis;
+
+  white-space: nowrap;
+
+  font-size: 9px;
+
+  font-weight: 600;
+}
+
+/* =========================================================
+   RESPONSIVE
+   ========================================================= */
+
+@media (
+  max-width: 380px
+) {
+  .app-content {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .shop-listing {
+    padding: 12px;
+  }
+
+  .shop-listing-right {
+    min-width: 95px;
+  }
+
+  .bottom-nav-title {
+    font-size: 8px;
+  }
+}
+
+@media (
+  min-width: 721px
+) {
+  .bottom-nav {
+    border:
+      1px solid
+      rgba(
+        100,
+        190,
+        255,
+        0.13
+      );
+
+    border-bottom: 0;
+
+    border-radius:
+      20px
+      20px
+      0
+      0;
+  }
+}
