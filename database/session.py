@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -10,36 +10,8 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from config import settings
+
 from database.base import Base
-
-
-# =========================================================
-# IMPORT ALL MODELS
-# =========================================================
-
-# Важно:
-# модели должны быть импортированы ДО create_all(),
-# чтобы SQLAlchemy зарегистрировал все таблицы.
-
-from database.models import (  # noqa: F401
-    User,
-    PromoCode,
-    PromoActivation,
-    Task,
-    TaskCompletion,
-)
-
-from database.shop_models import (  # noqa: F401
-    ShopCategory,
-    SellerProfile,
-    ShopListing,
-    ShopFavorite,
-    ShopCartItem,
-    ShopPurchase,
-    ShopDeal,
-    ShopReview,
-    ShopSettings,
-)
 
 
 # =========================================================
@@ -73,6 +45,15 @@ async_session_factory = async_sessionmaker(
 
 @asynccontextmanager
 async def get_session() -> AsyncIterator[AsyncSession]:
+    """
+    Создаёт AsyncSession.
+
+    Использование:
+
+        async with get_session() as session:
+            ...
+    """
+
     session = async_session_factory()
 
     try:
@@ -87,19 +68,59 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 
 
 # =========================================================
-# INITIALIZE DATABASE
+# DATABASE INITIALIZATION
 # =========================================================
 
 async def init_database() -> None:
+    """
+    Создаёт все таблицы, описанные в SQLAlchemy-моделях.
+
+    Важно:
+    database.models импортируется внутри функции,
+    чтобы модели успели зарегистрироваться
+    в Base.metadata.
+    """
+
+    # =====================================================
+    # IMPORT ALL MODELS
+    # =====================================================
+
+    from database.models import (
+        User,
+        PromoCode,
+        PromoActivation,
+        Task,
+        TaskCompletion,
+    )
+
+    # Убираем предупреждения IDE о неиспользуемых
+    # импортированных моделях.
+    _ = (
+        User,
+        PromoCode,
+        PromoActivation,
+        Task,
+        TaskCompletion,
+    )
+
+    # =====================================================
+    # CREATE TABLES
+    # =====================================================
+
     async with engine.begin() as connection:
+
         await connection.run_sync(
             Base.metadata.create_all
         )
 
 
 # =========================================================
-# CLOSE DATABASE
+# DATABASE CLOSE
 # =========================================================
 
 async def close_database() -> None:
+    """
+    Полностью закрывает SQLAlchemy engine.
+    """
+
     await engine.dispose()
