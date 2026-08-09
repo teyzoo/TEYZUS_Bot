@@ -5,14 +5,12 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import User
-from services.hunter.engine import (
-    HunterEngine,
-    HunterResult,
-)
+from services.hunter.engine import HunterEngine, HunterResult
+from services.premium import is_premium
 from services.search_limits import (
     can_search,
-    register_successful_search,
     get_remaining_searches,
+    register_successful_search,
 )
 
 
@@ -29,27 +27,21 @@ class HunterSearchService:
         self,
         engine: HunterEngine,
     ) -> None:
-
         self.engine = engine
 
     # =====================================================
-    # SEARCH
+    # COMMON SEARCH
     # =====================================================
 
-    async def search(
+    async def _run(
         self,
         session: AsyncSession,
         user: User,
-        length: int,
-        amount: int = 1,
+        candidates: list[str],
+        amount: int,
     ) -> HunterSearchResponse:
 
-        # -------------------------------------------------
-        # BLOCKED
-        # -------------------------------------------------
-
         if user.is_blocked:
-
             return HunterSearchResponse(
                 success=False,
                 message=(
@@ -59,60 +51,12 @@ class HunterSearchService:
                 results=[],
             )
 
-        # -------------------------------------------------
-        # AMOUNT VALIDATION
-        # -------------------------------------------------
-
-        if amount < 1:
-
-            amount = 1
-
-        if amount > 100:
-
-            amount = 100
-
-        # -------------------------------------------------
-        # LENGTH VALIDATION
-        # -------------------------------------------------
-
-        if length < 5 or length > 32:
-
+        if not candidates:
             return HunterSearchResponse(
                 success=False,
-                message=(
-                    "❌ Недопустимая длина username.\n\n"
-                    "Разрешено: от 5 до 32 символов."
-                ),
+                message="😔 Подходящих кандидатов не найдено.",
                 results=[],
             )
-
-        # -------------------------------------------------
-        # PREMIUM / FREE
-        # -------------------------------------------------
-
-        from services.premium import is_premium
-
-        premium = is_premium(user)
-
-        # -------------------------------------------------
-        # 5 SYMBOLS — PREMIUM
-        # -------------------------------------------------
-
-        if length == 5 and not premium:
-
-            return HunterSearchResponse(
-                success=False,
-                message=(
-                    "💎 <b>Пятисимвольный поиск</b>\n\n"
-                    "Username длиной 5 символов "
-                    "доступны только Premium пользователям."
-                ),
-                results=[],
-            )
-
-        # -------------------------------------------------
-        # CHECK LIMIT
-        # -------------------------------------------------
 
         allowed = await can_search(
             session=session,
@@ -120,68 +64,65 @@ class HunterSearchService:
         )
 
         if not allowed:
-
             remaining = await get_remaining_searches(
                 session=session,
                 user=user,
-            )
-
-            remaining_text = (
-                str(remaining)
-                if remaining is not None
-                else "∞"
             )
 
             return HunterSearchResponse(
                 success=False,
                 message=(
                     "🚫 <b>Дневной лимит поиска исчерпан.</b>\n\n"
-                    f"Осталось поисков: <b>{remaining_text}</b>\n\n"
+                    f"Осталось: <b>{remaining or 0}</b>\n\n"
                     "💎 Premium открывает безлимитный поиск."
                 ),
                 results=[],
             )
 
-        # -------------------------------------------------
-        # SEARCH
-        # -------------------------------------------------
+        results: list[HunterResult] = []
 
-        try:
+        # Проверяем кандидатов последовательно.
+        # Позже здесь можно сделать конкурентную проверку
+        # с ограничением количества одновременных запросов.
 
-            results = await self.engine.search(
-                length=length,
-                amount=amount,
-            )
+        for username in candidates:
 
-        except Exception:
+            if len(results) >= amount:
+                break
 
-            return HunterSearchResponse(
-                success=False,
-                message=(
-                    "⚠️ <b>Ошибка поиска.</b>\n\n"
-                    "Попробуй повторить поиск немного позже."
-                ),
-                results=[],
-            )
+            try:
+                result = await self.engine.check_candidate(
+                    username
+                )
 
-        # -------------------------------------------------
-        # NOTHING FOUND
-        # -------------------------------------------------
+            except Exception:
+                continue
+
+            if result is None:
+                continue
+
+            results.append(result)
 
         if not results:
-
             return HunterSearchResponse(
                 success=False,
                 message=(
-                    "😔 <b>Ничего не найдено.</b>\n\n"
-                    "Попробуй другую длину или другой режим поиска."
+                    "😔 <b>Свободных подходящих username не найдено.</b>\n\n"
+                    "Попробуй изменить параметры поиска."
                 ),
                 results=[],
             )
 
-        # -------------------------------------------------
-        # SUCCESS
-        # -------------------------------------------------
+        results.sort(
+            key=lambda item: (
+                item.beauty_score,
+                item.liquidity,
+                item.brand,
+                item.rarity,
+                item.price_max,
+            ),
+            reverse=True,
+        )
 
         registered = await register_successful_search(
             session=session,
@@ -189,20 +130,15 @@ class HunterSearchService:
         )
 
         if not registered:
-
             return HunterSearchResponse(
                 success=False,
                 message=(
-                    "🚫 <b>Лимит поиска исчерпан.</b>\n\n"
+                    "🚫 <b>Лимит поиска закончился.</b>\n\n"
                     "Попробуй снова завтра "
                     "или активируй Premium."
                 ),
                 results=[],
             )
-
-        # -------------------------------------------------
-        # RESULT MESSAGE
-        # -------------------------------------------------
 
         remaining = await get_remaining_searches(
             session=session,
@@ -210,25 +146,190 @@ class HunterSearchService:
         )
 
         if remaining is None:
-
-            limit_text = (
-                "💎 Premium • ♾️ безлимит"
+            footer = (
+                "💎 <b>Premium</b> • ♾️ безлимитный поиск"
             )
-
         else:
-
-            limit_text = (
-                f"🔎 Осталось сегодня: "
-                f"<b>{remaining}</b>"
+            footer = (
+                f"🔎 Осталось сегодня: <b>{remaining}</b>"
             )
 
         return HunterSearchResponse(
             success=True,
-            message=(
-                "✅ <b>Поиск завершён!</b>\n\n"
-                f"{limit_text}"
-            ),
-            results=results,
+            message=footer,
+            results=results[:amount],
+        )
+
+    # =====================================================
+    # BEAUTIFUL
+    # =====================================================
+
+    async def beautiful(
+        self,
+        session: AsyncSession,
+        user: User,
+        length: int,
+        amount: int,
+    ) -> HunterSearchResponse:
+
+        candidates = self.engine.prepare_candidates(
+            length=length,
+            amount=max(amount * 10, 100),
+        )
+
+        return await self._run(
+            session=session,
+            user=user,
+            candidates=candidates,
+            amount=amount,
+        )
+
+    # =====================================================
+    # EXPENSIVE
+    # =====================================================
+
+    async def expensive(
+        self,
+        session: AsyncSession,
+        user: User,
+        length: int,
+        amount: int,
+    ) -> HunterSearchResponse:
+
+        candidates = self.engine.prepare_candidates(
+            length=length,
+            amount=max(amount * 20, 200),
+        )
+
+        # Сначала сортируем кандидатов по потенциальной
+        # красоте. После проверки engine.check_candidate()
+        # выдаст реальные price/brand/liquidity.
+
+        return await self._run(
+            session=session,
+            user=user,
+            candidates=candidates,
+            amount=amount,
+        )
+
+    # =====================================================
+    # PREMIUM
+    # =====================================================
+
+    async def premium(
+        self,
+        session: AsyncSession,
+        user: User,
+        length: int,
+        amount: int,
+    ) -> HunterSearchResponse:
+
+        if not is_premium(user):
+            return HunterSearchResponse(
+                success=False,
+                message=(
+                    "💎 <b>Нужен Premium.</b>\n\n"
+                    "Пятисимвольный Hunter доступен "
+                    "только Premium пользователям."
+                ),
+                results=[],
+            )
+
+        candidates = self.engine.prepare_candidates(
+            length=length,
+            amount=max(amount * 20, 200),
+        )
+
+        return await self._run(
+            session=session,
+            user=user,
+            candidates=candidates,
+            amount=amount,
+        )
+
+    # =====================================================
+    # DICTIONARY
+    # =====================================================
+
+    async def dictionary(
+        self,
+        session: AsyncSession,
+        user: User,
+        length: int,
+        amount: int,
+    ) -> HunterSearchResponse:
+
+        candidates = self.engine.dictionary(
+            length=length,
+            limit=max(amount * 20, 200),
+        )
+
+        usernames = [
+            item.username
+            if hasattr(item, "username")
+            else item
+            for item in candidates
+        ]
+
+        return await self._run(
+            session=session,
+            user=user,
+            candidates=usernames,
+            amount=amount,
+        )
+
+    # =====================================================
+    # MASK
+    # =====================================================
+
+    async def mask(
+        self,
+        session: AsyncSession,
+        user: User,
+        mask: str,
+        amount: int,
+    ) -> HunterSearchResponse:
+
+        candidates = self.engine.mask(
+            mask=mask,
+            limit=max(amount * 20, 200),
+        )
+
+        usernames = [
+            item.username
+            if hasattr(item, "username")
+            else item
+            for item in candidates
+        ]
+
+        return await self._run(
+            session=session,
+            user=user,
+            candidates=usernames,
+            amount=amount,
+        )
+
+    # =====================================================
+    # POPULAR
+    # =====================================================
+
+    async def popular(
+        self,
+        session: AsyncSession,
+        user: User,
+        amount: int = 20,
+    ) -> HunterSearchResponse:
+
+        candidates = self.engine.prepare_candidates(
+            length=6,
+            amount=max(amount * 20, 200),
+        )
+
+        return await self._run(
+            session=session,
+            user=user,
+            candidates=candidates,
+            amount=amount,
         )
 
 
