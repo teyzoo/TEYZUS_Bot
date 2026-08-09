@@ -2,26 +2,12 @@ import asyncio
 import logging
 import sys
 
-from aiogram import (
-    Bot,
-    Dispatcher,
-)
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 
-from aiogram.client.default import (
-    DefaultBotProperties,
-)
-
-from aiogram.enums import (
-    ParseMode,
-)
-
-from fastapi import (
-    FastAPI,
-)
-
-from fastapi.responses import (
-    JSONResponse,
-)
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 import uvicorn
 
@@ -48,21 +34,10 @@ from bot.handlers.admin_promo import (
     router as admin_promo_router,
 )
 
-from bot.handlers.cases import (
-    router as cases_router,
-)
-
-from bot.handlers.admin_cases import (
-    router as admin_cases_router,
-)
-
-from bot.handlers.tasks import (
-    router as tasks_router,
-)
-
-from backend.shop import (
+from backend.shop_api import (
     router as shop_router,
 )
+
 
 # =========================================================
 # LOGGING
@@ -94,12 +69,22 @@ logger = logging.getLogger(
 
 app = FastAPI(
     title="TEYZUS API",
-    version="1.0.0",
+    version="1.1.0",
 )
+
+
+# =========================================================
+# API ROUTERS
+# =========================================================
 
 app.include_router(
     shop_router
 )
+
+
+# =========================================================
+# ROOT
+# =========================================================
 
 @app.get("/")
 async def root():
@@ -109,9 +94,14 @@ async def root():
             "status": "ok",
             "service": "TEYZUS",
             "bot": settings.bot_username,
+            "version": "1.1.0",
         }
     )
 
+
+# =========================================================
+# HEALTH
+# =========================================================
 
 @app.get("/health")
 async def health():
@@ -119,8 +109,24 @@ async def health():
     return JSONResponse(
         {
             "status": "healthy",
+            "service": "TEYZUS",
         }
     )
+
+
+# =========================================================
+# SHOP HEALTH
+# =========================================================
+
+@app.get(
+    "/api/miniapp/shop/health"
+)
+async def shop_health():
+
+    return {
+        "status": "ok",
+        "service": "TEYZUS SHOP",
+    }
 
 
 # =========================================================
@@ -138,9 +144,9 @@ async def run_bot() -> None:
 
     dispatcher = Dispatcher()
 
-    # =====================================================
-    # MAIN
-    # =====================================================
+    # -----------------------------------------------------
+    # MAIN ROUTERS
+    # -----------------------------------------------------
 
     dispatcher.include_router(
         start_router
@@ -154,35 +160,12 @@ async def run_bot() -> None:
         profile_router
     )
 
-   dispatcher.include_router(
-
-    tasks_router
-
-)
-
-dispatcher.include_router(
-
-    admin_promo_router
-
-) 
-    # =====================================================
-    # CASES
-    # =====================================================
-
-    dispatcher.include_router(
-        cases_router
-    )
-
-    # =====================================================
-    # OWNER
-    # =====================================================
+    # -----------------------------------------------------
+    # OWNER PROMO
+    # -----------------------------------------------------
 
     dispatcher.include_router(
         admin_promo_router
-    )
-
-    dispatcher.include_router(
-        admin_cases_router
     )
 
     logger.info(
