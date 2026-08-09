@@ -1,27 +1,86 @@
 from __future__ import annotations
 from datetime import datetime, timezone
-from sqlalchemy import func, select
+from typing import Optional
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.models import (
-    PromoActivation,
     PromoCode,
+    PromoActivation,
     User,
 )
 # =========================================================
-# 👤 USERS
+# HELPERS
 # =========================================================
-async def get_user(
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+def normalize_code(code: str) -> str:
+    return code.strip().upper()
+def parse_allowed_user_ids(
+    value: Optional[str],
+) -> Optional[set[int]]:
+    """
+    Преобразует строку:
+    "123,456,789"
+    в:
+    {123, 456, 789}
+    Если ограничений нет — возвращает None.
+    """
+    if not value:
+        return None
+    result: set[int] = set()
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            telegram_id = int(item)
+        except ValueError:
+            continue
+        if telegram_id > 0:
+            result.add(telegram_id)
+    return result or None
+# =========================================================
+# GET PROMO
+# =========================================================
+async def get_promo_by_code(
     session: AsyncSession,
-    telegram_id: int,
-) -> User | None:
+    code: str,
+) -> Optional[PromoCode]:
+    normalized = normalize_code(code)
     result = await session.execute(
-        select(User).where(
-            User.telegram_id == telegram_id
+        select(PromoCode).where(
+            PromoCode.code == normalized
+        )
+    )
+    return result.scalar_one_or_none()
+async def get_promo_by_id(
+    session: AsyncSession,
+    promo_id: int,
+) -> Optional[PromoCode]:
+    result = await session.execute(
+        select(PromoCode).where(
+            PromoCode.id == promo_id
         )
     )
     return result.scalar_one_or_none()
 # =========================================================
-# 🎟 PROMO — CREATE
+# LIST PROMOS
+# =========================================================
+async def list_promos(
+    session: AsyncSession,
+    active_only: bool = False,
+) -> list[PromoCode]:
+    query = select(PromoCode).order_by(
+        PromoCode.id.desc()
+    )
+    if active_only:
+        query = query.where(
+            PromoCode.is_active.is_(True)
+        )
+    result = await session.execute(query)
+    return list(result.scalars().all())
+# =========================================================
+# CREATE PROMO
 # =========================================================
 async def create_promo(
     session: AsyncSession,
@@ -29,34 +88,39 @@ async def create_promo(
     reward_type: str,
     reward_amount: int = 0,
     premium_days: int = 0,
-    max_activations: int | None = None,
-    max_activations_per_user: int | None = None,
-    starts_at: datetime | None = None,
-    expires_at: datetime | None = None,
+    max_activations: Optional[int] = None,
+    max_activations_per_user: Optional[int] = None,
+    starts_at: Optional[datetime] = None,
+    expires_at: Optional[datetime] = None,
     only_new_users: bool = False,
     only_premium: bool = False,
-    allowed_user_ids: str | None = None,
-    created_by: int = 0,
+    allowed_user_ids: Optional[str] = None,
+    created_by: Optional[int] = None,
 ) -> PromoCode:
-    code = code.strip().upper()
+    code = normalize_code(code)
     if not code:
         raise ValueError(
             "Промокод не может быть пустым."
         )
-    if reward_type not in {
+    if len(code) > 128:
+        raise ValueError(
+            "Максимальная длина промокода — 128 символов."
+        )
+    allowed_rewards = {
         "premium",
         "stars",
         "balance_rub",
         "searches",
         "traps",
-    }:
+    }
+    if reward_type not in allowed_rewards:
         raise ValueError(
             "Неизвестный тип награды."
         )
     if reward_type == "premium":
         if premium_days <= 0:
             raise ValueError(
-                "Количество Premium дней должно быть больше 0."
+                "Количество дней Premium должно быть больше 0."
             )
     else:
         if reward_amount <= 0:
@@ -66,12 +130,12 @@ async def create_promo(
     if max_activations is not None:
         if max_activations <= 0:
             raise ValueError(
-                "Общий лимит должен быть больше 0."
+                "Общий лимит активаций должен быть больше 0."
             )
     if max_activations_per_user is not None:
         if max_activations_per_user <= 0:
             raise ValueError(
-                "Лимит на пользователя должен быть больше 0."
+                "Лимит активаций на пользователя должен быть больше 0."
             )
     if (
         starts_at is not None
@@ -81,16 +145,11 @@ async def create_promo(
         raise ValueError(
             "Дата окончания должна быть позже даты начала."
         )
-    existing_result = await session.execute(
-        select(PromoCode).where(
-            func.lower(PromoCode.code)
-            == code.lower()
-        )
+    existing = await get_promo_by_code(
+        session=session,
+        code=code,
     )
-    existing = (
-        existing_result.scalar_one_or_none()
-    )
-    if existing:
+    if existing is not None:
         raise ValueError(
             "Такой промокод уже существует."
         )
@@ -100,76 +159,22 @@ async def create_promo(
         reward_amount=reward_amount,
         premium_days=premium_days,
         max_activations=max_activations,
-        max_activations_per_user=(
-            max_activations_per_user
-        ),
+        max_activations_per_user=max_activations_per_user,
         starts_at=starts_at,
         expires_at=expires_at,
         only_new_users=only_new_users,
         only_premium=only_premium,
         allowed_user_ids=allowed_user_ids,
-        is_active=True,
         created_by=created_by,
+        is_active=True,
+        activations_count=0,
     )
     session.add(promo)
     await session.commit()
     await session.refresh(promo)
     return promo
 # =========================================================
-# 🎟 PROMO — GET
-# =========================================================
-async def get_promo(
-    session: AsyncSession,
-    code: str,
-) -> PromoCode | None:
-    code = code.strip().upper()
-    result = await session.execute(
-        select(PromoCode).where(
-            PromoCode.code == code
-        )
-    )
-    return result.scalar_one_or_none()
-async def get_promo_by_id(
-    session: AsyncSession,
-    promo_id: int,
-) -> PromoCode | None:
-    result = await session.execute(
-        select(PromoCode).where(
-            PromoCode.id == promo_id
-        )
-    )
-    return result.scalar_one_or_none()
-# =========================================================
-# 🎟 PROMO — LIST
-# =========================================================
-async def list_promos(
-    session: AsyncSession,
-) -> list[PromoCode]:
-    result = await session.execute(
-        select(PromoCode).order_by(
-            PromoCode.created_at.desc()
-        )
-    )
-    return list(
-        result.scalars().all()
-    )
-async def list_active_promos(
-    session: AsyncSession,
-) -> list[PromoCode]:
-    result = await session.execute(
-        select(PromoCode)
-        .where(
-            PromoCode.is_active.is_(True)
-        )
-        .order_by(
-            PromoCode.created_at.desc()
-        )
-    )
-    return list(
-        result.scalars().all()
-    )
-# =========================================================
-# 🔴 PROMO — DEACTIVATE
+# DEACTIVATE PROMO
 # =========================================================
 async def deactivate_promo(
     session: AsyncSession,
@@ -185,16 +190,14 @@ async def deactivate_promo(
     await session.commit()
     return True
 # =========================================================
-# 🟢 PROMO — ACTIVATE CHECK
+# ACTIVATE CHECK
 # =========================================================
-async def validate_promo(
+async def check_promo(
     session: AsyncSession,
     promo: PromoCode,
     user: User,
 ) -> tuple[bool, str]:
-    now = datetime.now(
-        timezone.utc
-    )
+    now = utc_now()
     # -----------------------------------------------------
     # ACTIVE
     # -----------------------------------------------------
@@ -212,7 +215,7 @@ async def validate_promo(
     ):
         return (
             False,
-            "Этот промокод ещё не активен.",
+            "Промокод ещё не начал действовать.",
         )
     # -----------------------------------------------------
     # EXPIRATION
@@ -238,62 +241,73 @@ async def validate_promo(
             "Лимит активаций этого промокода исчерпан.",
         )
     # -----------------------------------------------------
-    # ONLY NEW USERS
-    # -----------------------------------------------------
-    if promo.only_new_users:
-        # Пользователь считается новым,
-        # если аккаунт создан менее суток назад.
-        if user.created_at is not None:
-            age = now - user.created_at
-            if age.total_seconds() > 86400:
-                return (
-                    False,
-                    "Промокод доступен только новым пользователям.",
-                )
-    # -----------------------------------------------------
     # ONLY PREMIUM
     # -----------------------------------------------------
     if promo.only_premium:
-        premium_active = user.premium_active
-        if (
-            premium_active
-            and user.premium_until is not None
-            and user.premium_until <= now
-        ):
-            premium_active = False
-        if not premium_active:
+        if not user.premium_active:
             return (
                 False,
                 "Этот промокод доступен только Premium пользователям.",
             )
+        if (
+            user.premium_until is not None
+            and user.premium_until <= now
+        ):
+            return (
+                False,
+                "Ваш Premium уже истёк.",
+            )
+    # -----------------------------------------------------
+    # ONLY NEW USERS
+    # -----------------------------------------------------
+    if promo.only_new_users:
+        # Пользователь считается новым,
+        # если он зарегистрирован недавно.
+        #
+        # Здесь проверяем наличие созданной записи.
+        # Если позже понадобится точное правило
+        # "новый = зарегистрирован не более N часов назад",
+        # его можно добавить здесь.
+        if user.created_at is None:
+            return (
+                False,
+                "Промокод доступен только новым пользователям.",
+            )
+        # По умолчанию считаем новым пользователя,
+        # который зарегистрирован не более 24 часов назад.
+        created_at = user.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(
+                tzinfo=timezone.utc
+            )
+        age_seconds = (
+            now - created_at
+        ).total_seconds()
+        if age_seconds > 24 * 60 * 60:
+            return (
+                False,
+                "Этот промокод доступен только новым пользователям.",
+            )
     # -----------------------------------------------------
     # ALLOWED USERS
     # -----------------------------------------------------
-    if promo.allowed_user_ids:
-        allowed = set()
-        for item in promo.allowed_user_ids.split(","):
-            item = item.strip()
-            if not item:
-                continue
-            try:
-                allowed.add(
-                    int(item)
-                )
-            except ValueError:
-                continue
-        if user.telegram_id not in allowed:
+    allowed_ids = parse_allowed_user_ids(
+        promo.allowed_user_ids
+    )
+    if allowed_ids is not None:
+        if user.telegram_id not in allowed_ids:
             return (
                 False,
-                "У тебя нет доступа к этому промокоду.",
+                "У вас нет доступа к этому промокоду.",
             )
     # -----------------------------------------------------
-    # PER USER LIMIT
+    # USER ACTIVATION LIMIT
     # -----------------------------------------------------
     if (
         promo.max_activations_per_user
         is not None
     ):
-        result = await session.execute(
+        count_result = await session.execute(
             select(
                 func.count(
                     PromoActivation.id
@@ -306,7 +320,7 @@ async def validate_promo(
             )
         )
         user_activations = int(
-            result.scalar_one() or 0
+            count_result.scalar_one() or 0
         )
         if (
             user_activations
@@ -314,29 +328,52 @@ async def validate_promo(
         ):
             return (
                 False,
-                "Ты уже использовал этот промокод максимальное количество раз.",
+                "Вы уже использовали этот промокод максимальное количество раз.",
             )
     return (
         True,
         "OK",
     )
 # =========================================================
-# 🎁 PROMO — ACTIVATE
+# GET USER ACTIVATIONS
+# =========================================================
+async def get_user_promo_activations(
+    session: AsyncSession,
+    promo_id: int,
+    user_id: int,
+) -> int:
+    result = await session.execute(
+        select(
+            func.count(
+                PromoActivation.id
+            )
+        ).where(
+            PromoActivation.promo_id == promo_id,
+            PromoActivation.user_id == user_id,
+        )
+    )
+    return int(
+        result.scalar_one() or 0
+    )
+# =========================================================
+# ACTIVATE PROMO
 # =========================================================
 async def activate_promo(
     session: AsyncSession,
     promo: PromoCode,
     user: User,
 ) -> PromoActivation:
-    valid, error = await validate_promo(
+    # Сначала повторно проверяем условия
+    # непосредственно перед записью.
+    allowed, reason = await check_promo(
         session=session,
         promo=promo,
         user=user,
     )
-    if not valid:
-        raise ValueError(error)
+    if not allowed:
+        raise ValueError(reason)
     # -----------------------------------------------------
-    # RECORD ACTIVATION
+    # CREATE ACTIVATION
     # -----------------------------------------------------
     activation = PromoActivation(
         promo_id=promo.id,
@@ -346,78 +383,39 @@ async def activate_promo(
         reward_amount=promo.reward_amount,
         premium_days=promo.premium_days,
     )
-    session.add(
-        activation
-    )
+    session.add(activation)
     # -----------------------------------------------------
-    # APPLY REWARD
+    # INCREMENT COUNTER
     # -----------------------------------------------------
-    if promo.reward_type == "stars":
-        user.stars_balance += (
-            promo.reward_amount
-        )
-    elif promo.reward_type == "balance_rub":
-        user.balance_rub += (
-            promo.reward_amount
-        )
-    elif promo.reward_type == "searches":
-        user.successful_searches_today += (
-            promo.reward_amount
-        )
-    elif promo.reward_type == "traps":
-        # Поле для ловушек появится
-        # в User на следующем этапе.
-        #
-        # Пока награда фиксируется
-        # в PromoActivation.
-        pass
-    elif promo.reward_type == "premium":
-        now = datetime.now(
-            timezone.utc
-        )
-        current_until = (
-            user.premium_until
-        )
-        if (
-            user.premium_active
-            and current_until is not None
-            and current_until > now
-        ):
-            base_date = current_until
-        else:
-            base_date = now
-        from datetime import timedelta
-        user.premium_active = True
-        user.premium_until = (
-            base_date
-            + timedelta(
-                days=promo.premium_days
-            )
-        )
     promo.activations_count += 1
     await session.commit()
-    await session.refresh(
-        activation
-    )
+    await session.refresh(activation)
     return activation
 # =========================================================
-# 📊 PROMO STATISTICS
+# GET PROMO STATISTICS
 # =========================================================
-async def promo_statistics(
+async def get_promo_statistics(
     session: AsyncSession,
     promo_id: int,
-) -> dict[str, int]:
+) -> dict:
+    promo = await get_promo_by_id(
+        session=session,
+        promo_id=promo_id,
+    )
+    if promo is None:
+        raise ValueError(
+            "Промокод не найден."
+        )
     total_result = await session.execute(
         select(
             func.count(
                 PromoActivation.id
             )
         ).where(
-            PromoActivation.promo_id
-            == promo_id
+            PromoActivation.promo_id == promo.id
         )
     )
-    total = int(
+    total_activations = int(
         total_result.scalar_one() or 0
     )
     unique_result = await session.execute(
@@ -428,14 +426,122 @@ async def promo_statistics(
                 )
             )
         ).where(
-            PromoActivation.promo_id
-            == promo_id
+            PromoActivation.promo_id == promo.id
         )
     )
     unique_users = int(
         unique_result.scalar_one() or 0
     )
+    if promo.max_activations:
+        percentage = (
+            total_activations
+            / promo.max_activations
+        ) * 100
+        percentage = min(
+            percentage,
+            100.0,
+        )
+    else:
+        percentage = 0.0
     return {
-        "total": total,
+        "promo_id": promo.id,
+        "code": promo.code,
+        "reward_type": promo.reward_type,
+        "reward_amount": promo.reward_amount,
+        "premium_days": promo.premium_days,
+        "total_activations": total_activations,
         "unique_users": unique_users,
+        "max_activations": promo.max_activations,
+        "max_activations_per_user": (
+            promo.max_activations_per_user
+        ),
+        "percentage": percentage,
+        "is_active": promo.is_active,
+        "starts_at": promo.starts_at,
+        "expires_at": promo.expires_at,
     }
+# =========================================================
+# GET ACTIVATIONS
+# =========================================================
+async def list_promo_activations(
+    session: AsyncSession,
+    promo_id: int,
+    limit: int = 100,
+) -> list[PromoActivation]:
+    limit = max(
+        1,
+        min(limit, 1000),
+    )
+    result = await session.execute(
+        select(PromoActivation)
+        .where(
+            PromoActivation.promo_id == promo_id
+        )
+        .order_by(
+            PromoActivation.id.desc()
+        )
+        .limit(limit)
+    )
+    return list(
+        result.scalars().all()
+    )
+# =========================================================
+# CHECK IF USER EVER ACTIVATED PROMO
+# =========================================================
+async def user_has_activated_promo(
+    session: AsyncSession,
+    promo_id: int,
+    user_id: int,
+) -> bool:
+    result = await session.execute(
+        select(PromoActivation.id)
+        .where(
+            PromoActivation.promo_id == promo_id,
+            PromoActivation.user_id == user_id,
+        )
+        .limit(1)
+    )
+    return (
+        result.scalar_one_or_none()
+        is not None
+    )
+# =========================================================
+# COUNT ALL PROMO ACTIVATIONS
+# =========================================================
+async def count_promo_activations(
+    session: AsyncSession,
+    promo_id: int,
+) -> int:
+    result = await session.execute(
+        select(
+            func.count(
+                PromoActivation.id
+            )
+        ).where(
+            PromoActivation.promo_id == promo_id
+        )
+    )
+    return int(
+        result.scalar_one() or 0
+    )
+# =========================================================
+# COUNT UNIQUE USERS
+# =========================================================
+async def count_unique_promo_users(
+    session: AsyncSession,
+    promo_id: int,
+) -> int:
+    result = await session.execute(
+        select(
+            func.count(
+                func.distinct(
+                    PromoActivation.user_id
+                )
+            )
+        ).where(
+            PromoActivation.promo_id == promo_id
+        )
+    )
+    return int(
+        result.scalar_one() or 0
+    )
