@@ -414,6 +414,12 @@ class Task(Base):
         index=True,
     )
 
+    period: Mapped[str] = mapped_column(
+    String(32),
+    default="daily",
+    nullable=False,
+    index=True,
+)
     # Например:
     #
     # subscribe_channel
