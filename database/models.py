@@ -11,8 +11,13 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
+    Index,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import (
+    Mapped,
+    mapped_column,
+)
 
 from database.base import Base
 
@@ -111,7 +116,7 @@ class User(Base):
     )
 
     # =====================================================
-    # BONUS SEARCHES
+    # BONUS
     # =====================================================
 
     bonus_searches: Mapped[int] = mapped_column(
@@ -120,19 +125,11 @@ class User(Base):
         nullable=False,
     )
 
-    # =====================================================
-    # BONUS TRAPS
-    # =====================================================
-
     bonus_traps: Mapped[int] = mapped_column(
         Integer,
         default=0,
         nullable=False,
     )
-
-    # =====================================================
-    # DISCOUNT
-    # =====================================================
 
     discount_percent: Mapped[int] = mapped_column(
         Integer,
@@ -158,7 +155,7 @@ class User(Base):
     )
 
     # =====================================================
-    # SEARCH LIMIT
+    # SEARCH
     # =====================================================
 
     successful_searches_today: Mapped[int] = mapped_column(
@@ -376,6 +373,14 @@ class PromoActivation(Base):
         nullable=False,
     )
 
+    __table_args__ = (
+        Index(
+            "ix_promo_activation_user_promo",
+            "user_id",
+            "promo_id",
+        ),
+    )
+
 
 # =========================================================
 # TASK
@@ -390,10 +395,6 @@ class Task(Base):
         autoincrement=True,
     )
 
-    # =====================================================
-    # BASIC
-    # =====================================================
-
     title: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
@@ -405,7 +406,7 @@ class Task(Base):
     )
 
     # =====================================================
-    # TASK TYPE
+    # TYPE
     # =====================================================
 
     task_type: Mapped[str] = mapped_column(
@@ -414,33 +415,26 @@ class Task(Base):
         index=True,
     )
 
-    period: Mapped[str] = mapped_column(
-    String(32),
-    default="daily",
-    nullable=False,
-    index=True,
-)
-    # Например:
-    #
-    # subscribe_channel
-    # referral
-    # search
-    # promo
-    # premium
-    # open_miniapp
-    # custom
-
-    # Значение, которое нужно выполнить.
-    #
-    # Например:
-    #
-    # @teyzus
-    # 5
-    # https://t.me/...
-    #
     target_value: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
+    )
+
+    # =====================================================
+    # PERIOD
+    #
+    # daily
+    # weekly
+    # monthly
+    # permanent
+    # custom
+    # =====================================================
+
+    period_type: Mapped[str] = mapped_column(
+        String(32),
+        default="permanent",
+        nullable=False,
+        index=True,
     )
 
     # =====================================================
@@ -453,21 +447,11 @@ class Task(Base):
         index=True,
     )
 
-    # Количество:
-    #
-    # Stars
-    # рублей
-    # поисков
-    # ловушек
-    # процентов скидки
-
     reward_amount: Mapped[int] = mapped_column(
         Integer,
         default=0,
         nullable=False,
     )
-
-    # Для Premium.
 
     premium_days: Mapped[int] = mapped_column(
         Integer,
@@ -503,7 +487,7 @@ class Task(Base):
     )
 
     # =====================================================
-    # USER FILTERS
+    # USER FILTER
     # =====================================================
 
     only_new_users: Mapped[bool] = mapped_column(
@@ -532,10 +516,6 @@ class Task(Base):
         nullable=True,
     )
 
-    # =====================================================
-    # STATUS
-    # =====================================================
-
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
@@ -543,37 +523,21 @@ class Task(Base):
         index=True,
     )
 
-    # =====================================================
-    # SORT
-    # =====================================================
-
     sort_order: Mapped[int] = mapped_column(
         Integer,
         default=0,
         nullable=False,
     )
 
-    # =====================================================
-    # IMAGE
-    # =====================================================
-
     image_file_id: Mapped[Optional[str]] = mapped_column(
         String(512),
         nullable=True,
     )
 
-    # =====================================================
-    # OWNER
-    # =====================================================
-
     created_by: Mapped[int] = mapped_column(
         BigInteger,
         nullable=False,
     )
-
-    # =====================================================
-    # DATES
-    # =====================================================
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -602,10 +566,6 @@ class TaskCompletion(Base):
         autoincrement=True,
     )
 
-    # =====================================================
-    # TASK
-    # =====================================================
-
     task_id: Mapped[int] = mapped_column(
         ForeignKey(
             "tasks.id",
@@ -614,10 +574,6 @@ class TaskCompletion(Base):
         nullable=False,
         index=True,
     )
-
-    # =====================================================
-    # USER
-    # =====================================================
 
     user_id: Mapped[int] = mapped_column(
         ForeignKey(
@@ -633,10 +589,6 @@ class TaskCompletion(Base):
         nullable=False,
         index=True,
     )
-
-    # =====================================================
-    # REWARD SNAPSHOT
-    # =====================================================
 
     reward_type: Mapped[str] = mapped_column(
         String(64),
@@ -655,9 +607,11 @@ class TaskCompletion(Base):
         nullable=False,
     )
 
-    # =====================================================
-    # DATE
-    # =====================================================
+    period_key: Mapped[Optional[str]] = mapped_column(
+        String(32),
+        nullable=True,
+        index=True,
+    )
 
     completed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -665,6 +619,16 @@ class TaskCompletion(Base):
         nullable=False,
         index=True,
     )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "task_id",
+            "user_id",
+            "period_key",
+            name="uq_task_user_period",
+        ),
+    )
+
 
 # =========================================================
 # CASE
@@ -689,18 +653,32 @@ class Case(Base):
         nullable=True,
     )
 
+    image_file_id: Mapped[Optional[str]] = mapped_column(
+        String(512),
+        nullable=True,
+    )
+
+    # =====================================================
+    # PRICE
+    # =====================================================
+
     price_stars: Mapped[int] = mapped_column(
         Integer,
         default=0,
         nullable=False,
     )
 
-    image_file_id: Mapped[Optional[str]] = mapped_column(
-        String(512),
-        nullable=True,
+    price_rub: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
     )
 
-    is_active: Mapped[bool] = mapped_column(
+    # =====================================================
+    # STATUS
+    # =====================================================
+
+    enabled: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
         nullable=False,
@@ -760,17 +738,10 @@ class CaseReward(Base):
     )
 
     emoji: Mapped[str] = mapped_column(
-        String(16),
+        String(32),
         default="🎁",
         nullable=False,
     )
-
-    # stars
-    # balance
-    # premium
-    # searches
-    # traps
-    # discount
 
     reward_type: Mapped[str] = mapped_column(
         String(64),
@@ -790,11 +761,13 @@ class CaseReward(Base):
         nullable=False,
     )
 
-    chance: Mapped[float] = mapped_column(
+    chance: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
         nullable=False,
     )
 
-    is_active: Mapped[bool] = mapped_column(
+    enabled: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
         nullable=False,
@@ -803,12 +776,6 @@ class CaseReward(Base):
     sort_order: Mapped[int] = mapped_column(
         Integer,
         default=0,
-        nullable=False,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
         nullable=False,
     )
 
@@ -841,7 +808,6 @@ class CaseOpen(Base):
             ondelete="SET NULL",
         ),
         nullable=True,
-        index=True,
     )
 
     user_id: Mapped[int] = mapped_column(
@@ -859,17 +825,14 @@ class CaseOpen(Base):
         index=True,
     )
 
-    # =====================================================
-    # REWARD SNAPSHOT
-    # =====================================================
-
-    reward_type: Mapped[str] = mapped_column(
-        String(64),
+    price_stars: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
         nullable=False,
     )
 
-    reward_title: Mapped[str] = mapped_column(
-        String(255),
+    reward_type: Mapped[str] = mapped_column(
+        String(64),
         nullable=False,
     )
 
@@ -885,19 +848,71 @@ class CaseOpen(Base):
         nullable=False,
     )
 
-    reward_chance: Mapped[float] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
         nullable=False,
     )
 
-    opened_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
+
+# =========================================================
+# SHOP CATEGORY
+# =========================================================
+
+class ShopCategory(Base):
+    __tablename__ = "shop_categories"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(128),
+        unique=True,
+        nullable=False,
+    )
+
+    slug: Mapped[str] = mapped_column(
+        String(128),
+        unique=True,
         nullable=False,
         index=True,
     )
 
+    emoji: Mapped[str] = mapped_column(
+        String(32),
+        default="🏪",
+        nullable=False,
+    )
+
+    description: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
+
+    sort_order: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+
+
 # =========================================================
-# TEYZUS SHOP
+# SELLER PROFILE
 # =========================================================
 
 class SellerProfile(Base):
@@ -919,12 +934,6 @@ class SellerProfile(Base):
         index=True,
     )
 
-    telegram_id: Mapped[int] = mapped_column(
-        BigInteger,
-        nullable=False,
-        index=True,
-    )
-
     display_name: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
@@ -940,33 +949,33 @@ class SellerProfile(Base):
         nullable=True,
     )
 
-    total_sales: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    total_reviews: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
     rating: Mapped[int] = mapped_column(
         Integer,
         default=0,
         nullable=False,
     )
 
-    is_verified: Mapped[bool] = mapped_column(
+    reviews_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    sales_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    online: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
         nullable=False,
     )
 
-    is_online: Mapped[bool] = mapped_column(
+    verified: Mapped[bool] = mapped_column(
         Boolean,
-        default=True,
+        default=False,
         nullable=False,
     )
 
@@ -997,10 +1006,6 @@ class ShopListing(Base):
         autoincrement=True,
     )
 
-    # =====================================================
-    # SELLER
-    # =====================================================
-
     seller_id: Mapped[int] = mapped_column(
         ForeignKey(
             "users.id",
@@ -1010,9 +1015,12 @@ class ShopListing(Base):
         index=True,
     )
 
-    seller_telegram_id: Mapped[int] = mapped_column(
-        BigInteger,
-        nullable=False,
+    category_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey(
+            "shop_categories.id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
         index=True,
     )
 
@@ -1022,21 +1030,18 @@ class ShopListing(Base):
 
     username: Mapped[str] = mapped_column(
         String(255),
+        unique=True,
         nullable=False,
         index=True,
     )
 
-    # =====================================================
-    # DESCRIPTION
-    # =====================================================
-
-    title: Mapped[Optional[str]] = mapped_column(
-        String(255),
+    description: Mapped[Optional[str]] = mapped_column(
+        Text,
         nullable=True,
     )
 
-    description: Mapped[Optional[str]] = mapped_column(
-        Text,
+    title: Mapped[Optional[str]] = mapped_column(
+        String(255),
         nullable=True,
     )
 
@@ -1055,21 +1060,12 @@ class ShopListing(Base):
     )
 
     # =====================================================
-    # CATEGORY
-    # =====================================================
-
-    category: Mapped[Optional[str]] = mapped_column(
-        String(64),
-        nullable=True,
-        index=True,
-    )
-
-    # =====================================================
     # PRICE
     # =====================================================
 
     price_rub: Mapped[int] = mapped_column(
         Integer,
+        default=0,
         nullable=False,
     )
 
@@ -1101,15 +1097,10 @@ class ShopListing(Base):
         nullable=True,
     )
 
-    # =====================================================
-    # SHOP FLAGS
-    # =====================================================
-
     is_premium: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
         nullable=False,
-        index=True,
     )
 
     is_verified: Mapped[bool] = mapped_column(
@@ -1117,16 +1108,6 @@ class ShopListing(Base):
         default=False,
         nullable=False,
     )
-
-    is_featured: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        nullable=False,
-    )
-
-    # =====================================================
-    # STATISTICS
-    # =====================================================
 
     views_count: Mapped[int] = mapped_column(
         Integer,
@@ -1140,16 +1121,6 @@ class ShopListing(Base):
         nullable=False,
     )
 
-    purchases_count: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    # =====================================================
-    # DATES
-    # =====================================================
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
@@ -1162,16 +1133,6 @@ class ShopListing(Base):
         default=utc_now,
         onupdate=utc_now,
         nullable=False,
-    )
-
-    published_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-    sold_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
     )
 
 
@@ -1212,13 +1173,21 @@ class ShopFavorite(Base):
         nullable=False,
     )
 
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "listing_id",
+            name="uq_shop_favorite_user_listing",
+        ),
+    )
+
 
 # =========================================================
-# SHOP CART
+# CART
 # =========================================================
 
-class ShopCartItem(Base):
-    __tablename__ = "shop_cart_items"
+class CartItem(Base):
+    __tablename__ = "cart_items"
 
     id: Mapped[int] = mapped_column(
         Integer,
@@ -1244,29 +1213,33 @@ class ShopCartItem(Base):
         index=True,
     )
 
-    added_at: Mapped[datetime] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
         nullable=False,
     )
 
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "listing_id",
+            name="uq_cart_user_listing",
+        ),
+    )
+
 
 # =========================================================
-# SHOP PURCHASE
+# PURCHASE
 # =========================================================
 
-class ShopPurchase(Base):
-    __tablename__ = "shop_purchases"
+class Purchase(Base):
+    __tablename__ = "purchases"
 
     id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True,
         autoincrement=True,
     )
-
-    # =====================================================
-    # BUYER
-    # =====================================================
 
     buyer_id: Mapped[int] = mapped_column(
         ForeignKey(
@@ -1277,16 +1250,6 @@ class ShopPurchase(Base):
         index=True,
     )
 
-    buyer_telegram_id: Mapped[int] = mapped_column(
-        BigInteger,
-        nullable=False,
-        index=True,
-    )
-
-    # =====================================================
-    # SELLER
-    # =====================================================
-
     seller_id: Mapped[int] = mapped_column(
         ForeignKey(
             "users.id",
@@ -1295,16 +1258,6 @@ class ShopPurchase(Base):
         nullable=False,
         index=True,
     )
-
-    seller_telegram_id: Mapped[int] = mapped_column(
-        BigInteger,
-        nullable=False,
-        index=True,
-    )
-
-    # =====================================================
-    # LISTING
-    # =====================================================
 
     listing_id: Mapped[int] = mapped_column(
         ForeignKey(
@@ -1320,10 +1273,6 @@ class ShopPurchase(Base):
         nullable=False,
     )
 
-    # =====================================================
-    # PRICE SNAPSHOT
-    # =====================================================
-
     price_rub: Mapped[int] = mapped_column(
         Integer,
         default=0,
@@ -1335,30 +1284,10 @@ class ShopPurchase(Base):
         nullable=True,
     )
 
-    currency: Mapped[str] = mapped_column(
-        String(16),
-        default="RUB",
+    payment_method: Mapped[str] = mapped_column(
+        String(32),
         nullable=False,
     )
-
-    # =====================================================
-    # PAYMENT
-    # =====================================================
-
-    payment_method: Mapped[Optional[str]] = mapped_column(
-        String(32),
-        nullable=True,
-    )
-
-    payment_id: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True,
-        index=True,
-    )
-
-    # =====================================================
-    # STATUS
-    # =====================================================
 
     status: Mapped[str] = mapped_column(
         String(32),
@@ -1367,26 +1296,10 @@ class ShopPurchase(Base):
         index=True,
     )
 
-    # pending
-    # paid
-    # escrow
-    # completed
-    # cancelled
-    # refunded
-
-    # =====================================================
-    # DATES
-    # =====================================================
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
         nullable=False,
-    )
-
-    paid_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
     )
 
     completed_at: Mapped[Optional[datetime]] = mapped_column(
@@ -1396,26 +1309,16 @@ class ShopPurchase(Base):
 
 
 # =========================================================
-# SHOP DEAL / ESCROW
+# DEAL / ESCROW
 # =========================================================
 
-class ShopDeal(Base):
-    __tablename__ = "shop_deals"
+class Deal(Base):
+    __tablename__ = "deals"
 
     id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True,
         autoincrement=True,
-    )
-
-    purchase_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "shop_purchases.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        unique=True,
-        index=True,
     )
 
     buyer_id: Mapped[int] = mapped_column(
@@ -1434,6 +1337,23 @@ class ShopDeal(Base):
         ),
         nullable=False,
         index=True,
+    )
+
+    listing_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey(
+            "shop_listings.id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
+
+    purchase_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey(
+            "purchases.id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
     )
 
     amount_rub: Mapped[int] = mapped_column(
@@ -1462,13 +1382,11 @@ class ShopDeal(Base):
     )
 
     # created
-    # funded
-    # username_transferred
-    # buyer_confirmed
+    # paid
+    # escrow
     # completed
     # cancelled
-    # disputed
-    # refunded
+    # dispute
 
     buyer_confirmed: Mapped[bool] = mapped_column(
         Boolean,
@@ -1488,266 +1406,6 @@ class ShopDeal(Base):
         nullable=False,
     )
 
-    funded_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-    cancelled_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-
-# =========================================================
-# SHOP REVIEW
-# =========================================================
-
-class ShopReview(Base):
-    __tablename__ = "shop_reviews"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    purchase_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "shop_purchases.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    buyer_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    seller_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    rating: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-    )
-
-    text: Mapped[Optional[str]] = mapped_column(
-        Text,
-        nullable=True,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        nullable=False,
-    )
-
-# =========================================================
-# TEYZUS SHOP — LISTINGS
-# =========================================================
-
-class ShopListing(Base):
-    __tablename__ = "shop_listings"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    # =====================================================
-    # SELLER
-    # =====================================================
-
-    seller_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    # =====================================================
-    # USERNAME
-    # =====================================================
-
-    username: Mapped[str] = mapped_column(
-        String(255),
-        nullable=False,
-        index=True,
-    )
-
-    # Название объявления.
-    # Например:
-    # "Красивый короткий username"
-
-    title: Mapped[str] = mapped_column(
-        String(255),
-        nullable=False,
-    )
-
-    # Описание от продавца.
-
-    description: Mapped[Optional[str]] = mapped_column(
-        Text,
-        nullable=True,
-    )
-
-    # =====================================================
-    # PRICE
-    # =====================================================
-
-    price_rub: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-        index=True,
-    )
-
-    price_stars: Mapped[Optional[int]] = mapped_column(
-        Integer,
-        nullable=True,
-    )
-
-    # =====================================================
-    # CATEGORY
-    # =====================================================
-
-    category: Mapped[Optional[str]] = mapped_column(
-        String(64),
-        nullable=True,
-        index=True,
-    )
-
-    # =====================================================
-    # FLAGS
-    # =====================================================
-
-    is_premium: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        nullable=False,
-        index=True,
-    )
-
-    is_verified: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        nullable=False,
-    )
-
-    # =====================================================
-    # MODERATION
-    # =====================================================
-
-    # Объявление опубликовано.
-
-    is_active: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        nullable=False,
-        index=True,
-    )
-
-    # Объявление прошло модерацию.
-
-    is_moderated: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        nullable=False,
-        index=True,
-    )
-
-    # =====================================================
-    # STATISTICS
-    # =====================================================
-
-    views: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    favorites_count: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    # =====================================================
-    # STATUS
-    # =====================================================
-
-    # Возможные значения:
-    #
-    # pending
-    # active
-    # reserved
-    # sold
-    # rejected
-    # deleted
-
-    status: Mapped[str] = mapped_column(
-        String(32),
-        default="pending",
-        nullable=False,
-        index=True,
-    )
-
-    # =====================================================
-    # MODERATION
-    # =====================================================
-
-    moderation_comment: Mapped[
-        Optional[str]
-    ] = mapped_column(
-        Text,
-        nullable=True,
-    )
-
-    moderated_by: Mapped[
-        Optional[int]
-    ] = mapped_column(
-        BigInteger,
-        nullable=True,
-    )
-
-    moderated_at: Mapped[
-        Optional[datetime]
-    ] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-    # =====================================================
-    # DATES
-    # =====================================================
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        nullable=False,
-        index=True,
-    )
-
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
@@ -1757,892 +1415,21 @@ class ShopListing(Base):
 
 
 # =========================================================
-# TEYZUS SHOP — FAVORITES
+# REVIEW
 # =========================================================
 
-class ShopFavorite(Base):
-    __tablename__ = "shop_favorites"
+class Review(Base):
+    __tablename__ = "reviews"
 
     id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True,
         autoincrement=True,
     )
-
-    # =====================================================
-    # USER
-    # =====================================================
-
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    # =====================================================
-    # LISTING
-    # =====================================================
-
-    listing_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "shop_listings.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    # =====================================================
-    # DATE
-    # =====================================================
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        nullable=False,
-    )
-    # =========================================================
-# TEYZUS SHOP — CART
-# =========================================================
-
-class ShopCartItem(Base):
-    __tablename__ = "shop_cart_items"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    listing_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "shop_listings.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        nullable=False,
-    )
-
-
-# =========================================================
-# TEYZUS SHOP — PURCHASE
-# =========================================================
-
-class ShopPurchase(Base):
-    __tablename__ = "shop_purchases"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    # -----------------------------------------------------
-    # BUYER
-    # -----------------------------------------------------
-
-    buyer_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    # -----------------------------------------------------
-    # SELLER
-    # -----------------------------------------------------
-
-    seller_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    # -----------------------------------------------------
-    # LISTING
-    # -----------------------------------------------------
-
-    listing_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "shop_listings.id",
-            ondelete="SET NULL",
-        ),
-        nullable=True,
-        index=True,
-    )
-
-    # -----------------------------------------------------
-    # USERNAME SNAPSHOT
-    # -----------------------------------------------------
-
-    username: Mapped[str] = mapped_column(
-        String(255),
-        nullable=False,
-    )
-
-    # -----------------------------------------------------
-    # PRICE SNAPSHOT
-    # -----------------------------------------------------
-
-    price_rub: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-    )
-
-    price_stars: Mapped[Optional[int]] = mapped_column(
-        Integer,
-        nullable=True,
-    )
-
-    # -----------------------------------------------------
-    # PAYMENT
-    # -----------------------------------------------------
-
-    payment_method: Mapped[str] = mapped_column(
-        String(32),
-        nullable=False,
-    )
-
-    # Возможные значения:
-    #
-    # rub
-    # stars
-    # ton
-    # usdt
-    # xrocket
-    # etc.
-
-    payment_id: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True,
-        index=True,
-    )
-
-    # -----------------------------------------------------
-    # STATUS
-    # -----------------------------------------------------
-
-    status: Mapped[str] = mapped_column(
-        String(32),
-        default="pending",
-        nullable=False,
-        index=True,
-    )
-
-    # pending
-    # paid
-    # processing
-    # completed
-    # cancelled
-    # refunded
-
-    # -----------------------------------------------------
-    # DATES
-    # -----------------------------------------------------
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        nullable=False,
-        index=True,
-    )
-
-    paid_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-    cancelled_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-
-# =========================================================
-# TEYZUS SHOP — DEAL
-# =========================================================
-
-class ShopDeal(Base):
-    __tablename__ = "shop_deals"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    # -----------------------------------------------------
-    # PURCHASE
-    # -----------------------------------------------------
-
-    purchase_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "shop_purchases.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        unique=True,
-        index=True,
-    )
-
-    # -----------------------------------------------------
-    # BUYER / SELLER
-    # -----------------------------------------------------
-
-    buyer_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    seller_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    # -----------------------------------------------------
-    # LISTING
-    # -----------------------------------------------------
-
-    listing_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "shop_listings.id",
-            ondelete="SET NULL",
-        ),
-        nullable=True,
-        index=True,
-    )
-
-    # -----------------------------------------------------
-    # AMOUNTS
-    # -----------------------------------------------------
-
-    amount_rub: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-    )
-
-    commission_rub: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    seller_amount_rub: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-    )
-
-    # -----------------------------------------------------
-    # STATUS
-    # -----------------------------------------------------
-
-    status: Mapped[str] = mapped_column(
-        String(32),
-        default="created",
-        nullable=False,
-        index=True,
-    )
-
-    # created
-    # waiting_payment
-    # paid
-    # username_transfer
-    # buyer_confirmed
-    # completed
-    # disputed
-    # cancelled
-    # refunded
-
-    # -----------------------------------------------------
-    # DATES
-    # -----------------------------------------------------
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        nullable=False,
-    )
-
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        onupdate=utc_now,
-        nullable=False,
-    )
-
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-
-# =========================================================
-# TEYZUS SHOP — SELLER PROFILE
-# =========================================================
-
-class ShopSellerProfile(Base):
-    __tablename__ = "shop_seller_profiles"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        unique=True,
-        index=True,
-    )
-
-    # -----------------------------------------------------
-    # STATISTICS
-    # -----------------------------------------------------
-
-    total_sales: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    completed_sales: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    cancelled_sales: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    total_reviews: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    rating: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    # Храним рейтинг ×100.
-    #
-    # Например:
-    # 4.85 = 485
-
-    # -----------------------------------------------------
-    # SELLER SETTINGS
-    # -----------------------------------------------------
-
-    is_online: Mapped[bool] = mapped_column(
-        Boolean,
-        default=True,
-        nullable=False,
-    )
-
-    accepting_orders: Mapped[bool] = mapped_column(
-        Boolean,
-        default=True,
-        nullable=False,
-    )
-
-    # -----------------------------------------------------
-    # DESCRIPTION
-    # -----------------------------------------------------
-
-    description: Mapped[
-        Optional[str]
-    ] = mapped_column(
-        Text,
-        nullable=True,
-    )
-
-    # -----------------------------------------------------
-    # DATES
-    # -----------------------------------------------------
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        nullable=False,
-    )
-
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        onupdate=utc_now,
-        nullable=False,
-    )
-
-
-# =========================================================
-# TEYZUS SHOP — REVIEW
-# =========================================================
-
-class ShopReview(Base):
-    __tablename__ = "shop_reviews"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    # -----------------------------------------------------
-    # DEAL
-    # -----------------------------------------------------
 
     deal_id: Mapped[int] = mapped_column(
         ForeignKey(
-            "shop_deals.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        unique=True,
-        index=True,
-    )
-
-    # -----------------------------------------------------
-    # REVIEWER
-    # -----------------------------------------------------
-
-    reviewer_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    # -----------------------------------------------------
-    # SELLER
-    # -----------------------------------------------------
-
-    seller_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    # -----------------------------------------------------
-    # RATING
-    # -----------------------------------------------------
-
-    rating: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-    )
-
-    # 1-5
-
-    text: Mapped[
-        Optional[str]
-    ] = mapped_column(
-        Text,
-        nullable=True,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        nullable=False,
-    )
-
-# =========================================================
-# TEYZUS SHOP
-# =========================================================
-
-class ShopListing(Base):
-    __tablename__ = "shop_listings"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    username: Mapped[str] = mapped_column(
-        String(255),
-        unique=True,
-        index=True,
-        nullable=False,
-    )
-
-    seller_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    price_rub: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-    )
-
-    price_stars: Mapped[Optional[int]] = mapped_column(
-        Integer,
-        nullable=True,
-    )
-
-    description: Mapped[Optional[str]] = mapped_column(
-        Text,
-        nullable=True,
-    )
-
-    category: Mapped[Optional[str]] = mapped_column(
-        String(64),
-        nullable=True,
-        index=True,
-    )
-
-    is_premium: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        nullable=False,
-    )
-
-    is_verified: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        nullable=False,
-    )
-
-    is_favorite_enabled: Mapped[bool] = mapped_column(
-        Boolean,
-        default=True,
-        nullable=False,
-    )
-
-    status: Mapped[str] = mapped_column(
-        String(32),
-        default="pending",
-        nullable=False,
-        index=True,
-    )
-
-    # pending
-    # approved
-    # rejected
-    # sold
-    # cancelled
-
-    views: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    favorites_count: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        nullable=False,
-    )
-
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        onupdate=utc_now,
-        nullable=False,
-    )
-
-
-class ShopFavorite(Base):
-    __tablename__ = "shop_favorites"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    listing_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "shop_listings.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        nullable=False,
-    )
-
-
-class ShopCartItem(Base):
-    __tablename__ = "shop_cart_items"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    listing_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "shop_listings.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        nullable=False,
-    )
-
-
-class ShopPurchase(Base):
-    __tablename__ = "shop_purchases"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    buyer_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    seller_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        index=True,
-    )
-
-    listing_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "shop_listings.id",
-            ondelete="SET NULL",
-        ),
-        nullable=True,
-        index=True,
-    )
-
-    username: Mapped[str] = mapped_column(
-        String(255),
-        nullable=False,
-    )
-
-    price_rub: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-    )
-
-    price_stars: Mapped[Optional[int]] = mapped_column(
-        Integer,
-        nullable=True,
-    )
-
-    status: Mapped[str] = mapped_column(
-        String(32),
-        default="created",
-        nullable=False,
-        index=True,
-    )
-
-    # created
-    # paid
-    # escrow
-    # completed
-    # cancelled
-    # refunded
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        nullable=False,
-    )
-
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        onupdate=utc_now,
-        nullable=False,
-    )
-
-
-class ShopDeal(Base):
-    __tablename__ = "shop_deals"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    purchase_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "shop_purchases.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-        unique=True,
-    )
-
-    buyer_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-    )
-
-    seller_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
-        nullable=False,
-    )
-
-    amount_rub: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-    )
-
-    commission_rub: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    seller_amount_rub: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    status: Mapped[str] = mapped_column(
-        String(32),
-        default="waiting_payment",
-        nullable=False,
-        index=True,
-    )
-
-    # waiting_payment
-    # paid
-    # escrow
-    # transferred
-    # completed
-    # disputed
-    # cancelled
-    # refunded
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        nullable=False,
-    )
-
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
-        onupdate=utc_now,
-        nullable=False,
-    )
-
-
-class ShopReview(Base):
-    __tablename__ = "shop_reviews"
-
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    purchase_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "shop_purchases.id",
+            "deals.id",
             ondelete="CASCADE",
         ),
         nullable=False,
@@ -2684,8 +1471,12 @@ class ShopReview(Base):
     )
 
 
-class SellerProfile(Base):
-    __tablename__ = "seller_profiles"
+# =========================================================
+# SHOP SETTINGS
+# =========================================================
+
+class ShopSetting(Base):
+    __tablename__ = "shop_settings"
 
     id: Mapped[int] = mapped_column(
         Integer,
@@ -2693,59 +1484,15 @@ class SellerProfile(Base):
         autoincrement=True,
     )
 
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "users.id",
-            ondelete="CASCADE",
-        ),
+    key: Mapped[str] = mapped_column(
+        String(128),
         unique=True,
         nullable=False,
         index=True,
     )
 
-    display_name: Mapped[Optional[str]] = mapped_column(
-        String(255),
-        nullable=True,
-    )
-
-    description: Mapped[Optional[str]] = mapped_column(
+    value: Mapped[str] = mapped_column(
         Text,
-        nullable=True,
-    )
-
-    total_sales: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    total_reviews: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    rating_sum: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    is_verified: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        nullable=False,
-    )
-
-    is_online: Mapped[bool] = mapped_column(
-        Boolean,
-        default=True,
-        nullable=False,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=utc_now,
         nullable=False,
     )
 
