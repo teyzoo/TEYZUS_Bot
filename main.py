@@ -60,6 +60,7 @@ from bot.handlers.tasks import (
     router as tasks_router,
 )
 
+from backend.shop import router as shop_router
 # =========================================================
 # LOGGING
 # =========================================================
@@ -93,6 +94,9 @@ app = FastAPI(
     version="1.0.0",
 )
 
+app.include_router(
+    shop_router
+)
 
 @app.get("/")
 async def root():
