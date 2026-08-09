@@ -2,14 +2,14 @@ import asyncio
 import logging
 import sys
 
-import uvicorn
-
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+
+import uvicorn
 
 from config import settings
 
@@ -68,6 +68,10 @@ app = FastAPI(
 )
 
 
+# =========================================================
+# ROOT
+# =========================================================
+
 @app.get("/")
 async def root():
     return JSONResponse(
@@ -79,23 +83,15 @@ async def root():
     )
 
 
+# =========================================================
+# HEALTH
+# =========================================================
+
 @app.get("/health")
 async def health():
     return JSONResponse(
         {
             "status": "healthy",
-            "service": "TEYZUS",
-        }
-    )
-
-
-@app.get("/api/health")
-async def api_health():
-    return JSONResponse(
-        {
-            "status": "ok",
-            "database": "connected",
-            "service": "TEYZUS API",
         }
     )
 
@@ -115,23 +111,31 @@ async def run_bot() -> None:
     dispatcher = Dispatcher()
 
     # =====================================================
-    # ROUTERS
+    # START
     # =====================================================
 
     dispatcher.include_router(
         start_router
     )
 
+    # =====================================================
+    # MENU / HUNTER
+    # =====================================================
+
     dispatcher.include_router(
         menu_router
     )
+
+    # =====================================================
+    # PROFILE
+    # =====================================================
 
     dispatcher.include_router(
         profile_router
     )
 
     # =====================================================
-    # OWNER / ADMIN
+    # ADMIN / PROMO
     # =====================================================
 
     dispatcher.include_router(
@@ -147,7 +151,7 @@ async def run_bot() -> None:
     )
 
     logger.info(
-        "Bot username: %s",
+        "Bot: @%s",
         settings.bot_username,
     )
 
@@ -156,6 +160,7 @@ async def run_bot() -> None:
     )
 
     try:
+
         await dispatcher.start_polling(
             bot,
             allowed_updates=(
@@ -164,21 +169,26 @@ async def run_bot() -> None:
         )
 
     except Exception:
+
         logger.exception(
-            "Bot polling crashed."
+            "TEYZUS Bot crashed"
         )
+
         raise
 
     finally:
+
         logger.info(
             "Closing username hunter..."
         )
 
         try:
             await hunter.close()
+
         except Exception:
+
             logger.exception(
-                "Failed to close hunter."
+                "Failed to close hunter"
             )
 
         logger.info(
@@ -187,13 +197,15 @@ async def run_bot() -> None:
 
         try:
             await bot.session.close()
+
         except Exception:
+
             logger.exception(
-                "Failed to close bot session."
+                "Failed to close bot session"
             )
 
         logger.info(
-            "TEYZUS BOT STOPPED"
+            "TEYZUS Bot stopped."
         )
 
 
@@ -202,9 +214,6 @@ async def run_bot() -> None:
 # =========================================================
 
 async def run_web() -> None:
-    logger.info(
-        "Starting FastAPI server..."
-    )
 
     configuration = uvicorn.Config(
         app,
@@ -217,26 +226,29 @@ async def run_web() -> None:
         configuration
     )
 
-    try:
-        await server.serve()
+    logger.info(
+        "Starting FastAPI server..."
+    )
 
-    except Exception:
-        logger.exception(
-            "FastAPI server crashed."
-        )
-        raise
+    logger.info(
+        "Host: %s",
+        settings.web_host,
+    )
 
-    finally:
-        logger.info(
-            "FastAPI server stopped."
-        )
+    logger.info(
+        "Port: %s",
+        settings.web_port,
+    )
+
+    await server.serve()
 
 
 # =========================================================
-# MAIN
+# APPLICATION STARTUP
 # =========================================================
 
-async def main() -> None:
+async def startup() -> None:
+
     logger.info(
         "========================================"
     )
@@ -246,59 +258,91 @@ async def main() -> None:
     )
 
     logger.info(
-        "========================================"
-    )
-
-    # =====================================================
-    # DATABASE
-    # =====================================================
-
-    logger.info(
         "Initializing database..."
     )
 
-    try:
-        await init_database()
-
-    except Exception:
-        logger.exception(
-            "Database initialization failed."
-        )
-        raise
+    await init_database()
 
     logger.info(
         "Database initialized successfully."
     )
 
-    # =====================================================
-    # RUN BOT + WEB
-    # =====================================================
+    logger.info(
+        "========================================"
+    )
+
+
+# =========================================================
+# APPLICATION SHUTDOWN
+# =========================================================
+
+async def shutdown() -> None:
 
     logger.info(
-        "Starting TEYZUS services..."
+        "========================================"
+    )
+
+    logger.info(
+        "TEYZUS SHUTDOWN"
+    )
+
+    logger.info(
+        "Closing database..."
     )
 
     try:
+
+        await close_database()
+
+        logger.info(
+            "Database closed successfully."
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Failed to close database"
+        )
+
+    logger.info(
+        "========================================"
+    )
+
+
+# =========================================================
+# MAIN
+# =========================================================
+
+async def main() -> None:
+
+    await startup()
+
+    try:
+
         await asyncio.gather(
             run_bot(),
             run_web(),
         )
 
+    except asyncio.CancelledError:
+
+        logger.info(
+            "TEYZUS tasks cancelled."
+        )
+
+        raise
+
+    except Exception:
+
+        logger.exception(
+            "TEYZUS application crashed."
+        )
+
+        raise
+
     finally:
-        logger.info(
-            "Closing database..."
-        )
 
-        try:
-            await close_database()
-        except Exception:
-            logger.exception(
-                "Failed to close database."
-            )
-
-        logger.info(
-            "TEYZUS shutdown complete."
-        )
+        await shutdown()
 
 
 # =========================================================
@@ -306,18 +350,23 @@ async def main() -> None:
 # =========================================================
 
 if __name__ == "__main__":
+
     try:
+
         asyncio.run(
             main()
         )
 
     except KeyboardInterrupt:
+
         logger.info(
             "TEYZUS stopped by user."
         )
 
     except Exception:
+
         logger.exception(
-            "TEYZUS stopped because of an unexpected error."
+            "Fatal TEYZUS error."
         )
-        raise
+
+        sys.exit(1)
