@@ -1,337 +1,384 @@
 from __future__ import annotations
 
-from itertools import product
+import itertools
+import random
+import string
+from collections.abc import Iterable, Iterator
 
 
 # =========================================================
 # CONSTANTS
 # =========================================================
 
-LETTERS = "abcdefghijklmnopqrstuvwxyz"
+LETTERS = string.ascii_lowercase
+DIGITS = string.digits
+ALPHANUMERIC = LETTERS + DIGITS
 
-MIN_USERNAME_LENGTH = 5
-MAX_USERNAME_LENGTH = 32
+DEFAULT_LIMIT = 1000
+MAX_LIMIT = 100_000
 
 
 # =========================================================
-# VALIDATION
+# NORMALIZE
 # =========================================================
 
-def validate_length(
-    length: int,
+def normalize_username(
+    username: str,
+) -> str:
+
+    username = username.strip().lower()
+
+    if username.startswith("@"):
+        username = username[1:]
+
+    return username
+
+
+# =========================================================
+# VALIDATE
+# =========================================================
+
+def is_valid_username(
+    username: str,
+    min_length: int = 5,
+    max_length: int = 32,
 ) -> bool:
 
-    return (
-        MIN_USERNAME_LENGTH
-        <= length
-        <= MAX_USERNAME_LENGTH
+    username = normalize_username(
+        username
     )
 
-
-# =========================================================
-# BASIC CANDIDATE CHECK
-# =========================================================
-
-def is_valid_candidate(
-    username: str,
-) -> bool:
-
-    if not username:
-        return False
-
-    username = username.lower()
-
     if not (
-        MIN_USERNAME_LENGTH
+        min_length
         <= len(username)
-        <= MAX_USERNAME_LENGTH
+        <= max_length
     ):
         return False
 
-    if not username[0].isalpha():
-        return False
+    for char in username:
 
-    return all(
-        char in LETTERS
-        for char in username
+        if not (
+            char.isascii()
+            and (
+                char.isalpha()
+                or char.isdigit()
+                or char == "_"
+            )
+        ):
+            return False
+
+    return True
+
+
+# =========================================================
+# RANDOM USERNAME
+# =========================================================
+
+def random_username(
+    length: int,
+    *,
+    letters_only: bool = False,
+    allow_digits: bool = True,
+    allow_underscore: bool = True,
+) -> str:
+
+    if length < 5:
+        raise ValueError(
+            "Минимальная длина username — 5."
+        )
+
+    if length > 32:
+        raise ValueError(
+            "Максимальная длина username — 32."
+        )
+
+    if letters_only:
+
+        alphabet = LETTERS
+
+    else:
+
+        alphabet = LETTERS
+
+        if allow_digits:
+            alphabet += DIGITS
+
+        if allow_underscore:
+            alphabet += "_"
+
+    # Первый символ не должен быть цифрой/underscore
+    first = random.choice(
+        LETTERS
+    )
+
+    if length == 1:
+        return first
+
+    rest = "".join(
+        random.choice(alphabet)
+        for _ in range(length - 1)
+    )
+
+    return (
+        first
+        + rest
     )
 
 
 # =========================================================
-# PATTERN GENERATOR
-# =========================================================
-
-def generate_candidates(
-    length: int,
-    limit: int = 1000,
-) -> list[str]:
-
-    if not validate_length(length):
-        return []
-
-    if limit <= 0:
-        return []
-
-    result: list[str] = []
-
-    seen: set[str] = set()
-
-    # -----------------------------------------------------
-    # Для небольших username полный перебор невозможен:
-    #
-    # 5 букв = 11 881 376
-    # 6 букв = 308 915 776
-    #
-    # Поэтому используем набор красивых шаблонов.
-    # -----------------------------------------------------
-
-    patterns = [
-        # Повторы
-        "aabb",
-        "abab",
-        "abba",
-
-        # Чередование
-        "ababab",
-        "abcabc",
-        "abccba",
-
-        # Повтор одной буквы
-        "aaab",
-        "abaa",
-        "baaa",
-
-        # Последовательности
-        "abc",
-        "cba",
-
-        # Более коммерческие структуры
-        "aabbcc",
-        "abac",
-        "abca",
-        "acba",
-    ]
-
-    # -----------------------------------------------------
-    # Для каждой позиции создаём комбинации букв.
-    # -----------------------------------------------------
-
-    for pattern in patterns:
-
-        if len(result) >= limit:
-            break
-
-        if len(pattern) > length:
-            continue
-
-        # -------------------------------------------------
-        # Дополняем шаблон до нужной длины.
-        # -------------------------------------------------
-
-        template = pattern
-
-        while len(template) < length:
-            template += "ab"
-
-        template = template[:length]
-
-        # -------------------------------------------------
-        # Определяем уникальные символы шаблона.
-        # -------------------------------------------------
-
-        unique_symbols = []
-
-        for char in template:
-
-            if char not in unique_symbols:
-                unique_symbols.append(char)
-
-        # -------------------------------------------------
-        # Не больше 4 переменных букв на шаблон.
-        # -------------------------------------------------
-
-        unique_symbols = unique_symbols[:4]
-
-        for values in product(
-            LETTERS,
-            repeat=len(unique_symbols),
-        ):
-
-            mapping = dict(
-                zip(
-                    unique_symbols,
-                    values,
-                )
-            )
-
-            username = "".join(
-                mapping[char]
-                for char in template
-            )
-
-            if not is_valid_candidate(
-                username
-            ):
-                continue
-
-            if username in seen:
-                continue
-
-            seen.add(username)
-
-            result.append(
-                username
-            )
-
-            if len(result) >= limit:
-                return result
-
-    return result
-
-
-# =========================================================
-# RANDOM-LIKE CANDIDATES
+# RANDOM BATCH
 # =========================================================
 
 def generate_random_candidates(
     length: int,
-    limit: int = 1000,
-) -> list[str]:
+    limit: int,
+    *,
+    letters_only: bool = False,
+    allow_digits: bool = True,
+    allow_underscore: bool = True,
+) -> Iterator[str]:
 
-    if not validate_length(length):
-        return []
-
-    if limit <= 0:
-        return []
-
-    result: list[str] = []
+    limit = min(
+        max(
+            0,
+            limit,
+        ),
+        MAX_LIMIT,
+    )
 
     seen: set[str] = set()
 
-    # Используем детерминированные комбинации,
-    # чтобы одинаковый запрос давал стабильные
-    # результаты и не создавал огромную нагрузку.
+    while len(seen) < limit:
 
-    for first in LETTERS:
+        username = random_username(
+            length=length,
+            letters_only=letters_only,
+            allow_digits=allow_digits,
+            allow_underscore=allow_underscore,
+        )
 
-        if len(result) >= limit:
-            break
+        if username in seen:
+            continue
 
-        for second in LETTERS:
+        seen.add(
+            username
+        )
 
-            if len(result) >= limit:
-                break
-
-            prefix = first + second
-
-            remaining = length - 2
-
-            if remaining <= 0:
-                candidate = prefix
-
-                if (
-                    candidate not in seen
-                    and is_valid_candidate(candidate)
-                ):
-                    seen.add(candidate)
-                    result.append(candidate)
-
-                continue
-
-            for suffix in product(
-                LETTERS,
-                repeat=min(
-                    remaining,
-                    2,
-                ),
-            ):
-
-                candidate = (
-                    prefix
-                    + "".join(suffix)
-                )
-
-                # Если username ещё короткий,
-                # дополняем повторением шаблона.
-
-                while len(candidate) < length:
-                    candidate += (
-                        candidate[-1]
-                        if candidate
-                        else "a"
-                    )
-
-                candidate = candidate[:length]
-
-                if not is_valid_candidate(
-                    candidate
-                ):
-                    continue
-
-                if candidate in seen:
-                    continue
-
-                seen.add(candidate)
-
-                result.append(
-                    candidate
-                )
-
-                if len(result) >= limit:
-                    return result
-
-    return result
+        yield username
 
 
 # =========================================================
-# MASK GENERATOR
+# DICTIONARY WORDS
 # =========================================================
 
-def generate_from_mask(
+DEFAULT_DICTIONARY = (
+    "admin",
+    "apple",
+    "alpha",
+    "angel",
+    "anime",
+    "audio",
+    "block",
+    "blue",
+    "bot",
+    "cloud",
+    "code",
+    "crypto",
+    "dark",
+    "data",
+    "dev",
+    "dream",
+    "elite",
+    "game",
+    "gold",
+    "home",
+    "king",
+    "light",
+    "magic",
+    "media",
+    "moon",
+    "music",
+    "neo",
+    "news",
+    "nft",
+    "nova",
+    "pixel",
+    "prime",
+    "pro",
+    "shop",
+    "sky",
+    "star",
+    "tech",
+    "token",
+    "web",
+    "wolf",
+    "world",
+)
+
+
+def generate_dictionary_candidates(
+    dictionary: Iterable[str],
+    *,
+    min_length: int = 5,
+    max_length: int = 32,
+    limit: int = DEFAULT_LIMIT,
+) -> Iterator[str]:
+
+    limit = min(
+        max(
+            0,
+            limit,
+        ),
+        MAX_LIMIT,
+    )
+
+    seen: set[str] = set()
+
+    for word in dictionary:
+
+        word = normalize_username(
+            word
+        )
+
+        if not is_valid_username(
+            word,
+            min_length=min_length,
+            max_length=max_length,
+        ):
+            continue
+
+        if word in seen:
+            continue
+
+        seen.add(
+            word
+        )
+
+        yield word
+
+        if len(seen) >= limit:
+            return
+
+
+# =========================================================
+# WORD VARIATIONS
+# =========================================================
+
+def generate_word_variations(
+    word: str,
+    *,
+    limit: int = 1000,
+) -> Iterator[str]:
+
+    word = normalize_username(
+        word
+    )
+
+    if not word:
+        return
+
+    candidates: list[str] = []
+
+    candidates.append(
+        word
+    )
+
+    candidates.append(
+        word + "1"
+    )
+
+    candidates.append(
+        word + "2"
+    )
+
+    candidates.append(
+        word + "7"
+    )
+
+    candidates.append(
+        word + "8"
+    )
+
+    candidates.append(
+        word + "9"
+    )
+
+    candidates.append(
+        word + "_"
+    )
+
+    candidates.append(
+        "_" + word
+    )
+
+    candidates.append(
+        "the" + word
+    )
+
+    candidates.append(
+        word + "official"
+    )
+
+    candidates.append(
+        word + "pro"
+    )
+
+    candidates.append(
+        word + "bot"
+    )
+
+    seen: set[str] = set()
+
+    for candidate in candidates:
+
+        candidate = normalize_username(
+            candidate
+        )
+
+        if candidate in seen:
+            continue
+
+        if not is_valid_username(
+            candidate
+        ):
+            continue
+
+        seen.add(
+            candidate
+        )
+
+        yield candidate
+
+        if len(seen) >= limit:
+            return
+
+
+# =========================================================
+# MASK
+# =========================================================
+
+def generate_mask_candidates(
     mask: str,
-    limit: int = 5000,
-) -> list[str]:
+    *,
+    limit: int = DEFAULT_LIMIT,
+) -> Iterator[str]:
 
-    mask = mask.lower().strip()
+    mask = normalize_username(
+        mask
+    )
 
-    if not (
-        MIN_USERNAME_LENGTH
-        <= len(mask)
-        <= MAX_USERNAME_LENGTH
-    ):
-        return []
+    if not mask:
+        return
 
-    if not all(
-        char == "?"
-        or char in LETTERS
-        for char in mask
-    ):
-        return []
+    limit = min(
+        max(
+            0,
+            limit,
+        ),
+        MAX_LIMIT,
+    )
 
-    if limit <= 0:
-        return []
-
-    unknown_count = mask.count("?")
-
-    if unknown_count == 0:
-
-        if is_valid_candidate(mask):
-            return [mask]
-
-        return []
-
-    # -----------------------------------------------------
-    # Без ограничения количество вариантов может
-    # взорваться:
-    #
-    # 5 ? = 11 881 376
-    # 6 ? = 308 915 776
-    #
-    # Поэтому разрешаем максимум 5 неизвестных.
-    # -----------------------------------------------------
-
-    if unknown_count > 5:
-        return []
+    alphabet = LETTERS
 
     positions = [
         index
@@ -339,40 +386,408 @@ def generate_from_mask(
         if char == "?"
     ]
 
-    result: list[str] = []
+    # -----------------------------------------------------
+    # Нет ? — это готовый username
+    # -----------------------------------------------------
+
+    if not positions:
+
+        if is_valid_username(
+            mask
+        ):
+
+            yield mask
+
+        return
+
+    # -----------------------------------------------------
+    # Слишком много комбинаций
+    # -----------------------------------------------------
+
+    total = len(alphabet) ** len(
+        positions
+    )
+
+    # -----------------------------------------------------
+    # Полный перебор для небольшого пространства
+    # -----------------------------------------------------
+
+    if total <= limit:
+
+        counter = 0
+
+        for values in itertools.product(
+            alphabet,
+            repeat=len(positions),
+        ):
+
+            chars = list(
+                mask
+            )
+
+            for index, value in zip(
+                positions,
+                values,
+            ):
+
+                chars[index] = value
+
+            candidate = "".join(
+                chars
+            )
+
+            if not is_valid_username(
+                candidate
+            ):
+                continue
+
+            yield candidate
+
+            counter += 1
+
+            if counter >= limit:
+                return
+
+        return
+
+    # -----------------------------------------------------
+    # Случайная выборка
+    # -----------------------------------------------------
 
     seen: set[str] = set()
 
-    for letters in product(
-        LETTERS,
-        repeat=unknown_count,
-    ):
+    while len(seen) < limit:
 
-        chars = list(mask)
-
-        for position, letter in zip(
-            positions,
-            letters,
-        ):
-            chars[position] = letter
-
-        username = "".join(chars)
-
-        if not is_valid_candidate(
-            username
-        ):
-            continue
-
-        if username in seen:
-            continue
-
-        seen.add(username)
-
-        result.append(
-            username
+        chars = list(
+            mask
         )
 
-        if len(result) >= limit:
-            break
+        for index in positions:
 
-    return result
+            chars[index] = random.choice(
+                alphabet
+            )
+
+        candidate = "".join(
+            chars
+        )
+
+        if not is_valid_username(
+            candidate
+        ):
+            continue
+
+        if candidate in seen:
+            continue
+
+        seen.add(
+            candidate
+        )
+
+        yield candidate
+
+
+# =========================================================
+# PREFIX
+# =========================================================
+
+def generate_prefix_candidates(
+    prefix: str,
+    length: int,
+    *,
+    limit: int = DEFAULT_LIMIT,
+) -> Iterator[str]:
+
+    prefix = normalize_username(
+        prefix
+    )
+
+    if length < len(prefix):
+        return
+
+    if not is_valid_username(
+        prefix,
+        min_length=1,
+        max_length=32,
+    ):
+        return
+
+    remaining = (
+        length
+        - len(prefix)
+    )
+
+    if remaining == 0:
+
+        yield prefix
+        return
+
+    alphabet = LETTERS
+
+    total = len(alphabet) ** remaining
+
+    # -----------------------------------------------------
+    # FULL ENUMERATION
+    # -----------------------------------------------------
+
+    if total <= limit:
+
+        counter = 0
+
+        for values in itertools.product(
+            alphabet,
+            repeat=remaining,
+        ):
+
+            candidate = (
+                prefix
+                + "".join(values)
+            )
+
+            yield candidate
+
+            counter += 1
+
+            if counter >= limit:
+                return
+
+        return
+
+    # -----------------------------------------------------
+    # RANDOM
+    # -----------------------------------------------------
+
+    seen: set[str] = set()
+
+    while len(seen) < limit:
+
+        suffix = "".join(
+            random.choice(alphabet)
+            for _ in range(remaining)
+        )
+
+        candidate = (
+            prefix
+            + suffix
+        )
+
+        if candidate in seen:
+            continue
+
+        seen.add(
+            candidate
+        )
+
+        yield candidate
+
+
+# =========================================================
+# SUFFIX
+# =========================================================
+
+def generate_suffix_candidates(
+    suffix: str,
+    length: int,
+    *,
+    limit: int = DEFAULT_LIMIT,
+) -> Iterator[str]:
+
+    suffix = normalize_username(
+        suffix
+    )
+
+    if length < len(suffix):
+        return
+
+    remaining = (
+        length
+        - len(suffix)
+    )
+
+    alphabet = LETTERS
+
+    if remaining == 0:
+
+        yield suffix
+        return
+
+    total = len(alphabet) ** remaining
+
+    if total <= limit:
+
+        counter = 0
+
+        for values in itertools.product(
+            alphabet,
+            repeat=remaining,
+        ):
+
+            candidate = (
+                "".join(values)
+                + suffix
+            )
+
+            if not is_valid_username(
+                candidate
+            ):
+                continue
+
+            yield candidate
+
+            counter += 1
+
+            if counter >= limit:
+                return
+
+        return
+
+    seen: set[str] = set()
+
+    while len(seen) < limit:
+
+        prefix = "".join(
+            random.choice(alphabet)
+            for _ in range(remaining)
+        )
+
+        candidate = (
+            prefix
+            + suffix
+        )
+
+        if not is_valid_username(
+            candidate
+        ):
+            continue
+
+        if candidate in seen:
+            continue
+
+        seen.add(
+            candidate
+        )
+
+        yield candidate
+
+
+# =========================================================
+# MAIN GENERATOR
+# =========================================================
+
+def generate_candidates(
+    length: int,
+    limit: int = DEFAULT_LIMIT,
+    *,
+    mode: str = "random",
+    mask: str | None = None,
+    prefix: str | None = None,
+    suffix: str | None = None,
+    dictionary: Iterable[str] | None = None,
+    letters_only: bool = False,
+    allow_digits: bool = True,
+    allow_underscore: bool = True,
+) -> Iterator[str]:
+
+    limit = min(
+        max(
+            0,
+            limit,
+        ),
+        MAX_LIMIT,
+    )
+
+    if limit == 0:
+        return
+
+    # -----------------------------------------------------
+    # MASK
+    # -----------------------------------------------------
+
+    if mask:
+
+        yield from generate_mask_candidates(
+            mask,
+            limit=limit,
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # PREFIX
+    # -----------------------------------------------------
+
+    if prefix:
+
+        yield from generate_prefix_candidates(
+            prefix,
+            length,
+            limit=limit,
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # SUFFIX
+    # -----------------------------------------------------
+
+    if suffix:
+
+        yield from generate_suffix_candidates(
+            suffix,
+            length,
+            limit=limit,
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # DICTIONARY
+    # -----------------------------------------------------
+
+    if mode == "dictionary":
+
+        words = (
+            dictionary
+            if dictionary is not None
+            else DEFAULT_DICTIONARY
+        )
+
+        yield from generate_dictionary_candidates(
+            words,
+            min_length=length,
+            max_length=length,
+            limit=limit,
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # RANDOM
+    # -----------------------------------------------------
+
+    yield from generate_random_candidates(
+        length=length,
+        limit=limit,
+        letters_only=letters_only,
+        allow_digits=allow_digits,
+        allow_underscore=allow_underscore,
+    )
+
+
+# =========================================================
+# LIST HELPER
+# =========================================================
+
+def generate_candidate_list(
+    length: int,
+    limit: int = DEFAULT_LIMIT,
+    **kwargs,
+) -> list[str]:
+
+    return list(
+        generate_candidates(
+            length=length,
+            limit=limit,
+            **kwargs,
+        )
+    )
