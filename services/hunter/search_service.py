@@ -2,204 +2,208 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from services.hunter.batch import (
-    BatchHunterChecker,
-    BatchCheckResult,
-)
-from services.hunter.mode_search import (
-    ModeSearchEngine,
-)
-from services.hunter.search_modes import (
-    SearchMode,
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from database.models import User
+
+from services.hunter.engine import (
+    HunterEngine,
+    HunterResult,
 )
 
-
-@dataclass
-class FinalSearchResult:
-
-    username: str
-
-    beauty: float
-
-    readability: float
-
-    available: bool
-
-    telegram_status: str
-
-    tme_available: bool
-
-    price_min: int
-
-    price_max: int
+from services.hunter.limits import (
+    can_search,
+    consume_search,
+    get_remaining_daily_searches,
+    reset_daily_counter_if_needed,
+)
 
 
-class HunterSearchService:
+@dataclass(frozen=True)
+class SearchResult:
+    success: bool
+    message: str
+
+    results: list[HunterResult]
+
+    consumed_search: bool = False
+    remaining_searches: int | None = None
+
+
+class SearchService:
 
     def __init__(
         self,
-        checker: BatchHunterChecker | None = None,
+        hunter: HunterEngine,
     ) -> None:
 
-        self.modes = ModeSearchEngine()
-
-        self.checker = (
-            checker
-            or BatchHunterChecker(
-                concurrency=20
-            )
-        )
-
-    async def close(self) -> None:
-
-        await self.checker.close()
+        self.hunter = hunter
 
     async def search(
         self,
-        mode: SearchMode,
-        premium: bool = False,
-        mask: str | None = None,
-        amount: int = 5000,
-        limit: int = 10,
-    ) -> list[FinalSearchResult]:
+        session: AsyncSession,
+        user: User,
+        length: int,
+        amount: int = 10,
+    ) -> SearchResult:
 
-        candidates = self.modes.search(
-            mode=mode,
-            premium=premium,
-            mask=mask,
-            amount=amount,
-            limit=amount,
+        # =================================================
+        # USER BLOCK
+        # =================================================
+
+        if user.is_blocked:
+
+            return SearchResult(
+                success=False,
+                message=(
+                    "⛔ <b>Твой аккаунт заблокирован.</b>\n\n"
+                    "Использование поиска недоступно."
+                ),
+                results=[],
+            )
+
+        # =================================================
+        # RESET DAILY COUNTER
+        # =================================================
+
+        reset_daily_counter_if_needed(user)
+
+        # =================================================
+        # LIMIT CHECK
+        # =================================================
+
+        if not can_search(user):
+
+            return SearchResult(
+                success=False,
+                message=(
+                    "🚫 <b>Лимит поиска на сегодня исчерпан.</b>\n\n"
+                    "Бесплатный лимит: "
+                    "<b>5 поисков в день</b>.\n\n"
+                    "💎 TEYZUS Premium снимает "
+                    "дневной лимит."
+                ),
+                results=[],
+                remaining_searches=0,
+            )
+
+        # =================================================
+        # VALIDATION
+        # =================================================
+
+        if length < 5 or length > 32:
+
+            return SearchResult(
+                success=False,
+                message=(
+                    "❌ Некорректная длина username.\n\n"
+                    "Допустимо: <b>5–32</b> символа."
+                ),
+                results=[],
+            )
+
+        if amount < 1:
+
+            return SearchResult(
+                success=False,
+                message=(
+                    "❌ Количество результатов "
+                    "должно быть больше 0."
+                ),
+                results=[],
+            )
+
+        amount = min(
+            amount,
+            100,
         )
 
-        if not candidates:
-            return []
+        # =================================================
+        # HUNTER
+        # =================================================
 
-        checked = await self.checker.check_many(
-            candidates
+        try:
+
+            results = await self.hunter.search(
+                length=length,
+                amount=amount,
+            )
+
+        except Exception:
+
+            return SearchResult(
+                success=False,
+                message=(
+                    "⚠️ <b>Ошибка Hunter Engine.</b>\n\n"
+                    "Попробуй повторить поиск позже."
+                ),
+                results=[],
+            )
+
+        # =================================================
+        # NO RESULTS
+        # =================================================
+
+        if not results:
+
+            return SearchResult(
+                success=False,
+                message=(
+                    "😔 Подходящих доступных "
+                    "username не найдено."
+                ),
+                results=[],
+                remaining_searches=(
+                    get_remaining_daily_searches(
+                        user
+                    )
+                ),
+            )
+
+        # =================================================
+        # CONSUME SEARCH
+        # =================================================
+
+        consumed = consume_search(
+            user
         )
 
-        available = [
-            item
-            for item in checked
-            if item.available
-        ]
+        if not consumed:
 
-        if not available:
-            return []
+            return SearchResult(
+                success=False,
+                message=(
+                    "🚫 <b>Лимит поиска исчерпан.</b>"
+                ),
+                results=[],
+                remaining_searches=0,
+            )
 
-        ranked = self.modes.prepare(
-            [
-                item.username
-                for item in available
-            ],
-            premium=premium,
-        )
+        # =================================================
+        # SAVE USER
+        # =================================================
 
-        ranking = {
-            username: index
-            for index, username
-            in enumerate(ranked)
-        }
+        await session.commit()
 
-        available.sort(
-            key=lambda item: ranking.get(
-                item.username,
-                999999,
+        remaining = (
+            get_remaining_daily_searches(
+                user
             )
         )
 
-        results: list[
-            FinalSearchResult
-        ] = []
-
-        for item in available[:limit]:
-
-            beauty = self._beauty(
-                item.username
-            )
-
-            readability = self._readability(
-                item.username
-            )
-
-            price_min, price_max = (
-                self._price(
-                    item.username,
-                    beauty,
-                )
-            )
-
-            results.append(
-                FinalSearchResult(
-                    username=item.username,
-                    beauty=beauty,
-                    readability=readability,
-                    available=True,
-                    telegram_status=(
-                        item.telegram.value
-                    ),
-                    tme_available=(
-                        item.tme_available
-                    ),
-                    price_min=price_min,
-                    price_max=price_max,
-                )
-            )
-
-        return results
-
-    @staticmethod
-    def _beauty(
-        username: str,
-    ) -> float:
-
-        from services.hunter.beauty import (
-            beauty_score,
+        return SearchResult(
+            success=True,
+            message=(
+                "✅ <b>Поиск завершён.</b>"
+            ),
+            results=results,
+            consumed_search=True,
+            remaining_searches=remaining,
         )
 
-        return round(
-            beauty_score(username),
-            2,
-        )
 
-    @staticmethod
-    def _readability(
-        username: str,
-    ) -> float:
+hunter_engine = HunterEngine()
 
-        from services.hunter.beauty import (
-            readability_score,
-        )
-
-        return round(
-            readability_score(username),
-            2,
-        )
-
-    @staticmethod
-    def _price(
-        username: str,
-        beauty: float,
-    ) -> tuple[int, int]:
-
-        base = len(username)
-
-        multiplier = max(
-            1.0,
-            beauty / 5.0,
-        )
-
-        minimum = int(
-            base
-            * 100
-            * multiplier
-        )
-
-        maximum = int(
-            minimum * 2.5
-        )
-
-        return (
-            minimum,
-            maximum,
-        )
+search_service = SearchService(
+    hunter=hunter_engine
+)
