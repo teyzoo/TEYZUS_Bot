@@ -1,12 +1,12 @@
 import asyncio
 import logging
 import sys
-import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+import uvicorn
 from config import settings
 from database.session import (
     init_database,
@@ -20,9 +20,6 @@ from bot.handlers.menu import (
 )
 from bot.handlers.profile import (
     router as profile_router,
-)
-from bot.handlers.promo import (
-    router as promo_router,
 )
 from bot.handlers.admin_promo import (
     router as admin_promo_router,
@@ -82,7 +79,7 @@ async def run_bot() -> None:
     )
     dispatcher = Dispatcher()
     # -----------------------------------------------------
-    # USER ROUTERS
+    # MAIN ROUTERS
     # -----------------------------------------------------
     dispatcher.include_router(
         start_router
@@ -93,11 +90,8 @@ async def run_bot() -> None:
     dispatcher.include_router(
         profile_router
     )
-    dispatcher.include_router(
-        promo_router
-    )
     # -----------------------------------------------------
-    # OWNER ROUTERS
+    # OWNER PROMO
     # -----------------------------------------------------
     dispatcher.include_router(
         admin_promo_router
@@ -116,7 +110,7 @@ async def run_bot() -> None:
         await hunter.close()
         await bot.session.close()
 # =========================================================
-# WEB SERVER
+# WEB
 # =========================================================
 async def run_web() -> None:
     configuration = uvicorn.Config(
