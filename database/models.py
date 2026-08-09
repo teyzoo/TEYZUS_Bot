@@ -393,3 +393,151 @@ class PromoActivation(Base):
         "User",
         back_populates="promo_activations",
     )
+# =========================================================
+# 🎟 PROMO SYSTEM
+# =========================================================
+from datetime import datetime, timezone
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
+from sqlalchemy.orm import (
+    Mapped,
+    mapped_column,
+)
+class PromoCode(Base):
+    __tablename__ = "promo_codes"
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+    code: Mapped[str] = mapped_column(
+        String(128),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+    reward_type: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    reward_amount: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+    premium_days: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+    max_activations: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    max_activations_per_user: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    activations_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+    starts_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    only_new_users: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+    only_premium: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+    allowed_user_ids: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+        index=True,
+    )
+    created_by: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+class PromoActivation(Base):
+    __tablename__ = "promo_activations"
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+    promo_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "promo_codes.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "users.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    telegram_id: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        index=True,
+    )
+    reward_type: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    reward_amount: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+    premium_days: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+    activated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
