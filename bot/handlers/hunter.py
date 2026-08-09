@@ -1,235 +1,107 @@
 from __future__ import annotations
-import logging
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy.ext.asyncio import AsyncSession
-from bot.states.common import (
-    HunterMaskState,
-    HunterSearchState,
-)
-from database.repositories import get_user
-from database.session import get_session
-from services.hunter.engine import (
-    HunterEngine,
-    HunterResult,
-)
-from services.hunter.masks import validate_mask
+
+from bot.states.common import HunterSearchState
+from database.session import async_session_factory
+from services.hunter.search_service import hunter_search_service
 from services.premium import is_premium
-from services.search_limits import (
-    can_search,
-    limit_text,
-    register_successful_search,
-    reset_daily_counter_if_needed,
-    searches_left,
-)
-logger = logging.getLogger("TEYZUS.hunter")
+from services.search_limits import search_limit_text
+
+
 router = Router()
-hunter = HunterEngine()
+
+
 # =========================================================
-# USER
+# HELPERS
 # =========================================================
-async def get_current_user(
-    message: Message,
-    session: AsyncSession,
-):
-    if not message.from_user:
-        return None
-    return await get_user(
-        session=session,
-        telegram_id=message.from_user.id,
-    )
-# =========================================================
-# RESULT FORMAT
-# =========================================================
+
 def format_result(
-    result: HunterResult,
+    index: int,
+    result,
 ) -> str:
+
+    price = (
+        f"{result.price_min:,}".replace(",", " ")
+        + "–"
+        + f"{result.price_max:,}".replace(",", " ")
+        + " ₽"
+    )
+
     return (
-        "✅ <b>НИК НАЙДЕН!</b>\n\n"
-        f"<code>@{result.username}</code>\n\n"
-        f"├ 📖 Читабельность — "
-        f"{result.readability:.1f}/10\n"
-        f"├ 🤖 Beauty Score — "
-        f"{result.beauty_score:.1f}/10\n"
-        f"├ 💎 Редкость — "
-        f"{result.rarity:.1f}/10\n"
-        f"├ 🏷 Брендовость — "
-        f"{result.brand:.1f}/10\n"
-        f"├ 📈 Ликвидность — "
-        f"{result.liquidity:.1f}/10\n"
-        f"├ 💰 Цена — "
-        f"${result.price_min:,}"
-        f"-"
-        f"${result.price_max:,}\n"
-        "└ ⚡️ Свободен"
+        f"{index}. <code>@{result.username}</code>\n"
+        f"   🤖 Beauty: <b>{result.beauty_score:.1f}/10</b>\n"
+        f"   📖 Readability: <b>{result.readability:.1f}/10</b>\n"
+        f"   💎 Rarity: <b>{result.rarity:.1f}/10</b>\n"
+        f"   🏷 Brand: <b>{result.brand:.1f}/10</b>\n"
+        f"   💧 Liquidity: <b>{result.liquidity:.1f}/10</b>\n"
+        f"   💰 Estimate: <b>{price}</b>\n"
+        f"   📱 Telegram: <b>{result.telegram_status}</b>\n"
+        f"   🌐 t.me: <b>{'Доступен' if result.tme_available else 'Недоступен'}</b>\n"
     )
-def format_results(
-    results: list[HunterResult],
-    title: str,
-) -> str:
-    if not results:
-        return (
-            "😔 <b>Свободных красивых username "
-            "не найдено.</b>\n\n"
-            "Попробуй другой режим поиска."
-        )
-    text = (
-        f"{title}\n\n"
-    )
+
+
+async def send_results(
+    message: Message,
+    results,
+    header: str,
+    footer: str | None = None,
+) -> None:
+
+    text = f"{header}\n\n"
+
     for index, result in enumerate(
         results,
         start=1,
     ):
-        text += (
-            f"<b>#{index}</b>\n"
-            f"{format_result(result)}\n\n"
+        text += format_result(
+            index=index,
+            result=result,
         )
-    return text
-# =========================================================
-# LIMIT
-# =========================================================
-def allowed_amount(
-    user,
-    requested: int,
-) -> int:
-    if is_premium(user):
-        return requested
-    reset_daily_counter_if_needed(
-        user
-    )
-    remaining = searches_left(
-        user
-    )
-    if remaining is None:
-        return requested
-    return min(
-        requested,
-        remaining,
-    )
-async def ensure_search_allowed(
-    message: Message,
-    user,
-) -> bool:
-    if user is None:
+        text += "\n"
+
+    if footer:
+        text += f"\n{footer}"
+
+    # Telegram ограничивает сообщение примерно 4096 символами.
+    # Разбиваем результаты при необходимости.
+
+    chunks: list[str] = []
+
+    current = ""
+
+    for line in text.splitlines(
+        keepends=True
+    ):
+
+        if len(current) + len(line) > 3800:
+
+            if current:
+                chunks.append(current)
+
+            current = line
+
+        else:
+
+            current += line
+
+    if current:
+        chunks.append(current)
+
+    for chunk in chunks:
+
         await message.answer(
-            "❌ Профиль пользователя не найден.\n"
-            "Попробуй снова через /start."
-        )
-        return False
-    reset_daily_counter_if_needed(
-        user
-    )
-    if can_search(user):
-        return True
-    await message.answer(
-        "🚫 <b>Дневной лимит исчерпан.</b>\n\n"
-        "Бесплатный пользователь может "
-        "найти до <b>5 свободных username "
-        "в сутки</b>.\n\n"
-        "💎 <b>TEYZUS Premium</b>\n"
-        "♾️ Безлимитный поиск\n"
-        "🔤 5 символов\n"
-        "📖 Dictionary\n"
-        "🎯 Mask Search\n"
-        "🚨 Trap",
-        parse_mode="HTML",
-    )
-    return False
-# =========================================================
-# SEARCH EXECUTION
-# =========================================================
-async def execute_search(
-    message: Message,
-    session: AsyncSession,
-    user,
-    search,
-    requested_amount: int,
-    title: str,
-) -> None:
-    amount = allowed_amount(
-        user,
-        requested_amount,
-    )
-    if amount <= 0:
-        await message.answer(
-            "🚫 <b>Лимит поиска исчерпан.</b>\n\n"
-            "💎 TEYZUS Premium открывает "
-            "♾️ безлимитный поиск.",
+            chunk,
             parse_mode="HTML",
         )
-        return
-    progress = await message.answer(
-        "🔎 <b>TEYZUS Hunter</b>\n\n"
-        "⚙️ Генерирую красивые username...\n"
-        "⏳ Проверяю Telegram...\n"
-        "⏳ Проверяю t.me...",
-        parse_mode="HTML",
-    )
-    try:
-        results = await search(
-            amount=amount
-        )
-    except Exception:
-        logger.exception(
-            "Hunter search failed"
-        )
-        try:
-            await progress.delete()
-        except Exception:
-            pass
-        await message.answer(
-            "⚠️ <b>Ошибка Hunter.</b>\n\n"
-            "Попробуй ещё раз.",
-            parse_mode="HTML",
-        )
-        return
-    try:
-        await progress.delete()
-    except Exception:
-        pass
-    found_count = len(
-        results
-    )
-    # -----------------------------------------------------
-    # Учитываем только реально найденные username.
-    # -----------------------------------------------------
-    if found_count > 0:
-        await register_successful_search(
-            session=session,
-            user=user,
-            found_count=found_count,
-        )
-    await message.answer(
-        format_results(
-            results,
-            title,
-        ),
-        parse_mode="HTML",
-    )
-    # -----------------------------------------------------
-    # LIMIT STATUS
-    # -----------------------------------------------------
-    if is_premium(user):
-        await message.answer(
-            "💎 Premium: <b>♾️ безлимитный поиск</b>",
-            parse_mode="HTML",
-        )
-    else:
-        reset_daily_counter_if_needed(
-            user
-        )
-        remaining = searches_left(
-            user
-        )
-        await message.answer(
-            "🔢 Лимит сегодня: "
-            f"<b>{remaining}/5</b>",
-            parse_mode="HTML",
-        )
+
+
 # =========================================================
-# 6 SYMBOL
+# 6 SYMBOL SEARCH
 # =========================================================
+
 @router.callback_query(
     F.data == "hunter_6"
 )
@@ -237,22 +109,26 @@ async def hunter_6(
     callback: CallbackQuery,
     state: FSMContext,
 ):
+
     await state.clear()
+
     await state.set_state(
         HunterSearchState.length_6
     )
+
     await callback.message.answer(
-        "🔎 <b>6 SYMBOL HUNTER</b>\n\n"
-        "TEYZUS сам генерирует красивые "
-        "username и проверяет их "
-        "доступность.\n\n"
-        "Можно указать от "
-        "<b>1 до 100</b> результатов.\n\n"
-        "Для Free действует лимит "
-        "<b>5 найденных username в сутки</b>.",
+        "🔎 <b>Поиск красивых username</b>\n\n"
+        "Длина: <b>6 символов</b>\n\n"
+        "TEYZUS сгенерирует красивые варианты "
+        "и проверит их доступность.\n\n"
+        "Укажи количество результатов:\n"
+        "<b>от 1 до 100</b>.",
         parse_mode="HTML",
     )
+
     await callback.answer()
+
+
 @router.message(
     HunterSearchState.length_6
 )
@@ -260,50 +136,110 @@ async def hunter_6_count(
     message: Message,
     state: FSMContext,
 ):
+
     try:
-        requested = int(
+
+        amount = int(
             message.text.strip()
         )
+
     except (
         ValueError,
         AttributeError,
     ):
+
         await message.answer(
             "❌ Введи число от 1 до 100."
         )
+
         return
-    if not 1 <= requested <= 100:
+
+    if not 1 <= amount <= 100:
+
         await message.answer(
-            "❌ Количество должно быть "
-            "от 1 до 100."
+            "❌ Количество должно быть от 1 до 100."
         )
+
         return
+
     await state.clear()
-    async with get_session() as session:
-        user = await get_current_user(
-            message,
-            session,
+
+    async with async_session_factory() as session:
+
+        result = await session.get(
+            # Получаем User через telegram_id
+            # ниже используется отдельный запрос.
+            # Импорт сделан внутри для чистоты файла.
+            __import__(
+                "database.models",
+                fromlist=["User"],
+            ).User,
+            message.from_user.id,
         )
-        if not await ensure_search_allowed(
-            message,
-            user,
-        ):
+
+        # SQLAlchemy get() работает только с PK,
+        # поэтому если не найдено — используем запрос ниже.
+
+        if result is None:
+
+            from sqlalchemy import select
+            from database.models import User
+
+            query = await session.execute(
+                select(User).where(
+                    User.telegram_id
+                    == message.from_user.id
+                )
+            )
+
+            result = query.scalar_one_or_none()
+
+        user = result
+
+        if user is None:
+
+            await message.answer(
+                "❌ Пользователь не найден.\n\n"
+                "Выполни /start."
+            )
+
             return
-        await execute_search(
-            message=message,
+
+        await message.answer(
+            "🔎 <b>Запускаю Hunter...</b>\n\n"
+            "Генерирую кандидатов и проверяю "
+            "доступность.",
+            parse_mode="HTML",
+        )
+
+        response = await hunter_search_service.search(
             session=session,
             user=user,
-            search=lambda amount:
-                hunter.search(
-                    length=6,
-                    amount=amount,
-                ),
-            requested_amount=requested,
-            title="🔎 <b>6 SYMBOL HUNTER</b>",
+            length=6,
+            amount=amount,
         )
+
+    if not response.success:
+
+        await message.answer(
+            response.message,
+            parse_mode="HTML",
+        )
+
+        return
+
+    await send_results(
+        message=message,
+        results=response.results,
+        header="✨ <b>Найденные username</b>",
+        footer=response.message,
+    )
+
+
 # =========================================================
 # 5 SYMBOL PREMIUM
 # =========================================================
+
 @router.callback_query(
     F.data == "hunter_5"
 )
@@ -311,18 +247,56 @@ async def hunter_5(
     callback: CallbackQuery,
     state: FSMContext,
 ):
+
     await state.clear()
+
+    async with async_session_factory() as session:
+
+        from sqlalchemy import select
+        from database.models import User
+
+        query = await session.execute(
+            select(User).where(
+                User.telegram_id
+                == callback.from_user.id
+            )
+        )
+
+        user = query.scalar_one_or_none()
+
+    if user is None:
+
+        await callback.answer(
+            "❌ Пользователь не найден.",
+            show_alert=True,
+        )
+
+        return
+
+    if not is_premium(user):
+
+        await callback.answer(
+            "💎 Эта функция доступна только Premium.",
+            show_alert=True,
+        )
+
+        return
+
     await state.set_state(
         HunterSearchState.length_5
     )
+
     await callback.message.answer(
-        "💎 <b>5 SYMBOL HUNTER</b>\n\n"
-        "Поиск 5-символьных username.\n\n"
-        "🔒 Только для TEYZUS Premium.\n\n"
-        "Количество: <b>1–100</b>.",
+        "💎 <b>Premium Hunter</b>\n\n"
+        "Длина: <b>5 символов</b>\n\n"
+        "Укажи количество результатов:\n"
+        "<b>от 1 до 100</b>.",
         parse_mode="HTML",
     )
+
     await callback.answer()
+
+
 @router.message(
     HunterSearchState.length_5
 )
@@ -330,285 +304,136 @@ async def hunter_5_count(
     message: Message,
     state: FSMContext,
 ):
+
     try:
-        requested = int(
+
+        amount = int(
             message.text.strip()
         )
+
     except (
         ValueError,
         AttributeError,
     ):
+
         await message.answer(
             "❌ Введи число от 1 до 100."
         )
+
         return
-    if not 1 <= requested <= 100:
+
+    if not 1 <= amount <= 100:
+
         await message.answer(
-            "❌ Количество должно быть "
-            "от 1 до 100."
+            "❌ Количество должно быть от 1 до 100."
         )
+
         return
+
     await state.clear()
-    async with get_session() as session:
-        user = await get_current_user(
-            message,
-            session,
+
+    async with async_session_factory() as session:
+
+        from sqlalchemy import select
+        from database.models import User
+
+        query = await session.execute(
+            select(User).where(
+                User.telegram_id
+                == message.from_user.id
+            )
         )
+
+        user = query.scalar_one_or_none()
+
         if user is None:
+
             await message.answer(
-                "❌ Профиль не найден."
+                "❌ Пользователь не найден."
             )
+
             return
+
         if not is_premium(user):
+
             await message.answer(
-                "💎 <b>TEYZUS Premium</b>\n\n"
-                "5-символьный поиск доступен "
-                "только Premium.",
-                parse_mode="HTML",
+                "💎 Для пятисимвольного Hunter нужен Premium."
             )
+
             return
-        await execute_search(
-            message=message,
-            session=session,
-            user=user,
-            search=lambda amount:
-                hunter.premium(
-                    length=5,
-                    amount=amount,
-                ),
-            requested_amount=requested,
-            title="💎 <b>5 SYMBOL PREMIUM</b>",
-        )
-# =========================================================
-# DICTIONARY
-# =========================================================
-@router.callback_query(
-    F.data == "hunter_dictionary"
-)
-async def hunter_dictionary(
-    callback: CallbackQuery,
-    state: FSMContext,
-):
-    await state.clear()
-    await state.set_state(
-        HunterSearchState.dictionary
-    )
-    await callback.message.answer(
-        "📖 <b>DICTIONARY HUNTER</b>\n\n"
-        "TEYZUS ищет реальные слова "
-        "и красивые коммерческие username.\n\n"
-        "🔒 Только Premium.\n\n"
-        "Укажи длину от <b>5 до 32</b>.",
-        parse_mode="HTML",
-    )
-    await callback.answer()
-@router.message(
-    HunterSearchState.dictionary
-)
-async def hunter_dictionary_length(
-    message: Message,
-    state: FSMContext,
-):
-    try:
-        length = int(
-            message.text.strip()
-        )
-    except (
-        ValueError,
-        AttributeError,
-    ):
+
         await message.answer(
-            "❌ Введи длину от 5 до 32."
-        )
-        return
-    if not 5 <= length <= 32:
-        await message.answer(
-            "❌ Длина должна быть "
-            "от 5 до 32."
-        )
-        return
-    await state.clear()
-    async with get_session() as session:
-        user = await get_current_user(
-            message,
-            session,
-        )
-        if user is None:
-            await message.answer(
-                "❌ Профиль не найден."
-            )
-            return
-        if not is_premium(user):
-            await message.answer(
-                "💎 <b>TEYZUS Premium</b>\n\n"
-                "Dictionary доступен "
-                "только Premium.",
-                parse_mode="HTML",
-            )
-            return
-        await execute_search(
-            message=message,
-            session=session,
-            user=user,
-            search=lambda amount:
-                hunter.dictionary(
-                    length=length,
-                    amount=amount,
-                ),
-            requested_amount=10,
-            title="📖 <b>DICTIONARY HUNTER</b>",
-        )
-# =========================================================
-# MASK
-# =========================================================
-@router.callback_query(
-    F.data == "hunter_mask"
-)
-async def hunter_mask(
-    callback: CallbackQuery,
-    state: FSMContext,
-):
-    await state.clear()
-    await state.set_state(
-        HunterMaskState.mask
-    )
-    await callback.message.answer(
-        "🎯 <b>MASK HUNTER</b>\n\n"
-        "Используй <code>?</code> "
-        "для неизвестной буквы.\n\n"
-        "Примеры:\n"
-        "<code>?nova?</code>\n"
-        "<code>v?l?r?</code>\n"
-        "<code>?a??a?</code>\n\n"
-        "🔒 Только Premium.",
-        parse_mode="HTML",
-    )
-    await callback.answer()
-@router.message(
-    HunterMaskState.mask
-)
-async def hunter_mask_input(
-    message: Message,
-    state: FSMContext,
-):
-    mask = (
-        message.text.strip()
-        if message.text
-        else ""
-    )
-    if not validate_mask(mask):
-        await message.answer(
-            "❌ Неверная маска.\n\n"
-            "Используй английские буквы "
-            "и <code>?</code>.\n\n"
-            "Длина: 5–32.",
+            "💎 <b>Premium Hunter запускается...</b>",
             parse_mode="HTML",
         )
-        return
-    await state.clear()
-    async with get_session() as session:
-        user = await get_current_user(
-            message,
-            session,
-        )
-        if user is None:
-            await message.answer(
-                "❌ Профиль не найден."
-            )
-            return
-        if not is_premium(user):
-            await message.answer(
-                "💎 <b>TEYZUS Premium</b>\n\n"
-                "Mask Search доступен "
-                "только Premium.",
-                parse_mode="HTML",
-            )
-            return
-        await execute_search(
-            message=message,
+
+        response = await hunter_search_service.search(
             session=session,
             user=user,
-            search=lambda amount:
-                hunter.mask(
-                    mask=mask,
-                    amount=amount,
-                ),
-            requested_amount=10,
-            title="🎯 <b>MASK HUNTER</b>",
+            length=5,
+            amount=amount,
         )
+
+    if not response.success:
+
+        await message.answer(
+            response.message,
+            parse_mode="HTML",
+        )
+
+        return
+
+    await send_results(
+        message=message,
+        results=response.results,
+        header="💎 <b>Premium Hunter</b>",
+        footer=response.message,
+    )
+
+
 # =========================================================
-# POPULAR
+# SEARCH LIMIT
 # =========================================================
+
 @router.callback_query(
-    F.data == "hunter_popular"
+    F.data == "hunter_limit"
 )
-async def hunter_popular(
+async def hunter_limit(
     callback: CallbackQuery,
 ):
-    progress = await callback.message.answer(
-        "🔥 <b>POPULAR HUNTER</b>\n\n"
-        "⚙️ Ищу красивые username...\n"
-        "⏳ Проверяю доступность...",
-        parse_mode="HTML",
-    )
-    try:
-        results = await hunter.popular(
-            amount=10
+
+    async with async_session_factory() as session:
+
+        from sqlalchemy import select
+        from database.models import User
+
+        query = await session.execute(
+            select(User).where(
+                User.telegram_id
+                == callback.from_user.id
+            )
         )
-    except Exception:
-        logger.exception(
-            "Popular hunter error"
+
+        user = query.scalar_one_or_none()
+
+        if user is None:
+
+            await callback.answer(
+                "❌ Пользователь не найден.",
+                show_alert=True,
+            )
+
+            return
+
+        text = await search_limit_text(
+            session=session,
+            user=user,
         )
-        await progress.delete()
-        await callback.message.answer(
-            "⚠️ Ошибка поиска."
-        )
-        await callback.answer()
-        return
-    await progress.delete()
+
     await callback.message.answer(
-        format_results(
-            results,
-            "🔥 <b>POPULAR USERNAMES</b>",
-        ),
+        "📊 <b>Лимит поиска</b>\n\n"
+        f"{text}",
         parse_mode="HTML",
     )
-    await callback.answer()
-# =========================================================
-# EXPENSIVE
-# =========================================================
-@router.callback_query(
-    F.data == "hunter_expensive_6"
-)
-async def hunter_expensive(
-    callback: CallbackQuery,
-):
-    progress = await callback.message.answer(
-        "💎 <b>EXPENSIVE HUNTER</b>\n\n"
-        "⚙️ Ищу редкие и дорогие username...\n"
-        "⏳ Проверяю доступность...",
-        parse_mode="HTML",
-    )
-    try:
-        results = await hunter.expensive(
-            amount=10
-        )
-    except Exception:
-        logger.exception(
-            "Expensive hunter error"
-        )
-        await progress.delete()
-        await callback.message.answer(
-            "⚠️ Ошибка поиска."
-        )
-        await callback.answer()
-        return
-    await progress.delete()
-    await callback.message.answer(
-        format_results(
-            results,
-            "💎 <b>EXPENSIVE USERNAMES</b>",
-        ),
-        parse_mode="HTML",
-    )
+
     await callback.answer()
