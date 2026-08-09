@@ -4,9 +4,11 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     Message,
 )
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from bot.states.admin import OwnerPromoState
 from database.models import (
     PromoActivation,
@@ -16,15 +18,19 @@ from database.models import (
 from database.repositories import (
     create_promo,
     deactivate_promo,
+    get_promo_by_id,
     list_promos,
+    promo_statistics,
 )
-from database.session import async_session_factory
+from database.session import (
+    async_session_factory,
+)
 from services.roles import (
     is_owner,
 )
 router = Router()
 # =========================================================
-# CONSTANTS
+# 🎟 CONSTANTS
 # =========================================================
 REWARD_NAMES = {
     "premium": "💎 Premium",
@@ -34,7 +40,7 @@ REWARD_NAMES = {
     "traps": "🚨 Дополнительные ловушки",
 }
 # =========================================================
-# HELPERS
+# 🔐 OWNER HELPERS
 # =========================================================
 async def get_owner(
     telegram_id: int,
@@ -57,6 +63,9 @@ async def require_owner(
     return is_owner(
         user.role
     )
+# =========================================================
+# 🧰 PARSERS
+# =========================================================
 def parse_optional_int(
     value: str,
 ) -> int | None:
@@ -69,6 +78,7 @@ def parse_optional_int(
         "∞",
         "безлимит",
         "без ограничений",
+        "безлимитно",
     }:
         return None
     return int(value)
@@ -92,7 +102,93 @@ def parse_date(
         tzinfo=timezone.utc
     )
 # =========================================================
-# OWNER PROMO MENU
+# 🎟 KEYBOARDS
+# =========================================================
+def promo_list_keyboard(
+    promos: list[PromoCode],
+) -> InlineKeyboardMarkup:
+    rows = []
+    for promo in promos[:50]:
+        status = (
+            "🟢"
+            if promo.is_active
+            else "🔴"
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"{status} {promo.code}"
+                    ),
+                    callback_data=(
+                        f"owner_promo_view:{promo.id}"
+                    ),
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="➕ Создать промокод",
+                callback_data="owner_promo_create",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows
+    )
+def promo_view_keyboard(
+    promo: PromoCode,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="📊 Статистика",
+                callback_data=(
+                    f"owner_promo_stats:{promo.id}"
+                ),
+            )
+        ]
+    ]
+    if promo.is_active:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔴 Отключить",
+                    callback_data=(
+                        f"owner_promo_disable:{promo.id}"
+                    ),
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ Все промокоды",
+                callback_data="owner_promos",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows
+    )
+def confirmation_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Создать",
+                    callback_data="owner_promo_confirm",
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data="owner_promo_cancel",
+                ),
+            ]
+        ]
+    )
+# =========================================================
+# 🎟 OWNER PROMO MENU
 # =========================================================
 @router.callback_query(
     F.data == "owner_promos"
@@ -114,42 +210,54 @@ async def owner_promos(
         promos = await list_promos(
             session=session
         )
-    text = (
-        "🎟 <b>Управление промокодами</b>\n\n"
-        f"Всего промокодов: <b>{len(promos)}</b>\n\n"
-    )
     if not promos:
-        text += (
-            "Промокодов пока нет.\n\n"
+        await callback.message.answer(
+            "🎟 <b>Промокоды TEYZUS</b>\n\n"
+            "Промокодов пока нет.",
+            parse_mode="HTML",
+            reply_markup=promo_list_keyboard(
+                []
+            ),
         )
-    else:
-        for promo in promos[:30]:
-            status = (
-                "🟢"
-                if promo.is_active
-                else "🔴"
-            )
-            limit = (
-                str(promo.max_activations)
-                if promo.max_activations is not None
-                else "∞"
-            )
-            text += (
-                f"{status} <code>{promo.code}</code>\n"
-                f"🎁 {REWARD_NAMES.get(promo.reward_type, promo.reward_type)}\n"
-                f"📊 {promo.activations_count}/{limit}\n\n"
-            )
-    text += (
-        "Используй кнопки Owner Panel "
-        "для создания и управления кодами."
+        await callback.answer()
+        return
+    text = (
+        "🎟 <b>ПРОМОКОДЫ TEYZUS</b>\n\n"
+        f"Всего: <b>{len(promos)}</b>\n\n"
     )
+    for promo in promos[:20]:
+        status = (
+            "🟢"
+            if promo.is_active
+            else "🔴"
+        )
+        limit = (
+            str(
+                promo.max_activations
+            )
+            if promo.max_activations is not None
+            else "∞"
+        )
+        text += (
+            f"{status} "
+            f"<code>{promo.code}</code>\n"
+            f"🎁 "
+            f"{REWARD_NAMES.get("
+            f"promo.reward_type"
+            f", promo.reward_type)}\n"
+            f"📊 "
+            f"{promo.activations_count}/{limit}\n\n"
+        )
     await callback.message.answer(
         text,
         parse_mode="HTML",
+        reply_markup=promo_list_keyboard(
+            promos
+        ),
     )
     await callback.answer()
 # =========================================================
-# CREATE PROMO
+# ➕ CREATE PROMO
 # =========================================================
 @router.callback_query(
     F.data == "owner_promo_create"
@@ -449,7 +557,7 @@ async def promo_user_limit(
         "Дата начала действия.\n\n"
         "Формат:\n"
         "<code>09.08.2026 12:00</code>\n\n"
-        "Или отправь:\n"
+        "Или:\n"
         "<code>нет</code>",
         parse_mode="HTML",
     )
@@ -623,7 +731,7 @@ async def promo_only_premium(
         parse_mode="HTML",
     )
 # =========================================================
-# STEP 10 — USER IDS
+# STEP 10 — ALLOWED USERS
 # =========================================================
 @router.message(
     OwnerPromoState.allowed_user_ids
@@ -644,7 +752,7 @@ async def promo_allowed_users(
     }:
         allowed_user_ids = None
     else:
-        ids = []
+        ids: list[int] = []
         for item in value.split(","):
             item = item.strip()
             if not item:
@@ -666,12 +774,14 @@ async def promo_allowed_users(
                     "положительным числом."
                 )
                 return
-            ids.append(
-                telegram_id
-            )
+            if telegram_id not in ids:
+                ids.append(
+                    telegram_id
+                )
         if not ids:
             await message.answer(
-                "❌ Укажи Telegram ID или отправь <code>все</code>.",
+                "❌ Укажи Telegram ID "
+                "или отправь <code>все</code>.",
                 parse_mode="HTML",
             )
             return
@@ -764,15 +874,20 @@ async def promo_allowed_users(
         "🎟 <b>ПРОВЕРКА ПРОМОКОДА</b>\n\n"
         f"🔑 Код: <code>{code}</code>\n"
         f"🎁 {reward_text}\n"
-        f"📊 Общий лимит: <b>{global_limit_text}</b>\n"
-        f"👤 На пользователя: <b>{user_limit_text}</b>\n"
-        f"📅 Начало: <b>{starts_text}</b>\n"
-        f"⌛ Окончание: <b>{expires_text}</b>\n"
+        f"📊 Общий лимит: "
+        f"<b>{global_limit_text}</b>\n"
+        f"👤 На пользователя: "
+        f"<b>{user_limit_text}</b>\n"
+        f"📅 Начало: "
+        f"<b>{starts_text}</b>\n"
+        f"⌛ Окончание: "
+        f"<b>{expires_text}</b>\n"
         f"👶 Новые пользователи: "
         f"<b>{'Да' if only_new_users else 'Нет'}</b>\n"
         f"💎 Только Premium: "
         f"<b>{'Да' if only_premium else 'Нет'}</b>\n"
-        f"🔐 Доступ: <b>{users_text}</b>\n\n"
+        f"🔐 Доступ: "
+        f"<b>{users_text}</b>\n\n"
         "Создать этот промокод?"
     )
     await state.set_state(
@@ -784,29 +899,7 @@ async def promo_allowed_users(
         reply_markup=confirmation_keyboard(),
     )
 # =========================================================
-# CONFIRMATION KEYBOARD
-# =========================================================
-def confirmation_keyboard():
-    from aiogram.types import (
-        InlineKeyboardButton,
-        InlineKeyboardMarkup,
-    )
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="✅ Создать",
-                    callback_data="owner_promo_confirm",
-                ),
-                InlineKeyboardButton(
-                    text="❌ Отмена",
-                    callback_data="owner_promo_cancel",
-                ),
-            ]
-        ]
-    )
-# =========================================================
-# CONFIRM
+# ✅ CONFIRM
 # =========================================================
 @router.callback_query(
     F.data == "owner_promo_confirm"
@@ -864,10 +957,13 @@ async def owner_promo_confirm(
                 ),
                 created_by=callback.from_user.id,
             )
-    except ValueError as error:
+    except (
+        ValueError,
+        KeyError,
+    ) as error:
         await state.clear()
         await callback.message.answer(
-            f"❌ <b>Промокод не создан.</b>\n\n"
+            "❌ <b>Промокод не создан.</b>\n\n"
             f"{error}",
             parse_mode="HTML",
         )
@@ -875,11 +971,13 @@ async def owner_promo_confirm(
         return
     await state.clear()
     await callback.message.answer(
-        "✅ <b>Промокод создан!</b>\n\n"
+        "✅ <b>ПРОМОКОД СОЗДАН!</b>\n\n"
         f"🎟 Код: <code>{promo.code}</code>\n"
         f"🎁 Награда: "
-        f"<b>{REWARD_NAMES.get(promo.reward_type, promo.reward_type)}</b>\n"
-        f"📊 Активаций: "
+        f"<b>{REWARD_NAMES.get("
+        f"promo.reward_type"
+        f", promo.reward_type)}</b>\n"
+        f"📊 Общий лимит: "
         f"<b>{promo.max_activations or '∞'}</b>\n"
         f"👤 На пользователя: "
         f"<b>{promo.max_activations_per_user or '∞'}</b>",
@@ -889,7 +987,7 @@ async def owner_promo_confirm(
         "Промокод создан!"
     )
 # =========================================================
-# CANCEL
+# ❌ CANCEL
 # =========================================================
 @router.callback_query(
     F.data == "owner_promo_cancel"
@@ -912,10 +1010,256 @@ async def owner_promo_cancel(
     )
     await callback.answer()
 # =========================================================
-# DEACTIVATE PROMO
+# 👁 VIEW PROMO
 # =========================================================
 @router.callback_query(
-    F.data.startswith("owner_promo_disable:")
+    F.data.startswith(
+        "owner_promo_view:"
+    )
+)
+async def owner_promo_view(
+    callback: CallbackQuery,
+):
+    if not await require_owner(
+        callback.from_user.id
+    ):
+        await callback.answer(
+            "⛔ Доступ запрещён.",
+            show_alert=True,
+        )
+        return
+    try:
+        promo_id = int(
+            callback.data.split(":")[1]
+        )
+    except (
+        ValueError,
+        IndexError,
+    ):
+        await callback.answer(
+            "❌ Неверный ID.",
+            show_alert=True,
+        )
+        return
+    async with async_session_factory() as session:
+        promo = await get_promo_by_id(
+            session=session,
+            promo_id=promo_id,
+        )
+        if promo is None:
+            await callback.answer(
+                "❌ Промокод не найден.",
+                show_alert=True,
+            )
+            return
+        stats = await get_promo_stats(
+            session=session,
+            promo_id=promo.id,
+        )
+    status = (
+        "🟢 Активен"
+        if promo.is_active
+        else "🔴 Отключён"
+    )
+    reward_name = REWARD_NAMES.get(
+        promo.reward_type,
+        promo.reward_type,
+    )
+    if promo.reward_type == "premium":
+        reward_text = (
+            f"{reward_name} — "
+            f"{promo.premium_days} дней"
+        )
+    else:
+        reward_text = (
+            f"{reward_name} — "
+            f"{promo.reward_amount}"
+        )
+    global_limit = (
+        str(promo.max_activations)
+        if promo.max_activations is not None
+        else "∞"
+    )
+    user_limit = (
+        str(
+            promo.max_activations_per_user
+        )
+        if promo.max_activations_per_user is not None
+        else "∞"
+    )
+    starts_text = (
+        promo.starts_at.strftime(
+            "%d.%m.%Y %H:%M"
+        )
+        if promo.starts_at
+        else "Нет"
+    )
+    expires_text = (
+        promo.expires_at.strftime(
+            "%d.%m.%Y %H:%M"
+        )
+        if promo.expires_at
+        else "Нет"
+    )
+    allowed_text = (
+        promo.allowed_user_ids
+        if promo.allowed_user_ids
+        else "Все"
+    )
+    text = (
+        "🎟 <b>ПРОМОКОД</b>\n\n"
+        f"🔑 Код: <code>{promo.code}</code>\n"
+        f"📌 Статус: <b>{status}</b>\n\n"
+        f"🎁 Награда: <b>{reward_text}</b>\n"
+        f"🔥 Активаций: "
+        f"<b>{stats['total']}</b> / {global_limit}\n"
+        f"👥 Уникальных пользователей: "
+        f"<b>{stats['unique_users']}</b>\n"
+        f"👤 Лимит на пользователя: "
+        f"<b>{user_limit}</b>\n\n"
+        f"📅 Начало: <b>{starts_text}</b>\n"
+        f"⌛ Окончание: <b>{expires_text}</b>\n"
+        f"👶 Только новые: "
+        f"<b>{'Да' if promo.only_new_users else 'Нет'}</b>\n"
+        f"💎 Только Premium: "
+        f"<b>{'Да' if promo.only_premium else 'Нет'}</b>\n"
+        f"🔐 Доступ: <b>{allowed_text}</b>\n\n"
+        f"🆔 ID: <code>{promo.id}</code>"
+    )
+    await callback.message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=promo_view_keyboard(
+            promo
+        ),
+    )
+    await callback.answer()
+# =========================================================
+# 📊 STATISTICS
+# =========================================================
+async def get_promo_stats(
+    session,
+    promo_id: int,
+) -> dict[str, int]:
+    total_result = await session.execute(
+        select(
+            func.count(
+                PromoActivation.id
+            )
+        ).where(
+            PromoActivation.promo_id
+            == promo_id
+        )
+    )
+    total = int(
+        total_result.scalar_one() or 0
+    )
+    unique_result = await session.execute(
+        select(
+            func.count(
+                func.distinct(
+                    PromoActivation.user_id
+                )
+            )
+        ).where(
+            PromoActivation.promo_id
+            == promo_id
+        )
+    )
+    unique_users = int(
+        unique_result.scalar_one() or 0
+    )
+    return {
+        "total": total,
+        "unique_users": unique_users,
+    }
+@router.callback_query(
+    F.data.startswith(
+        "owner_promo_stats:"
+    )
+)
+async def owner_promo_stats(
+    callback: CallbackQuery,
+):
+    if not await require_owner(
+        callback.from_user.id
+    ):
+        await callback.answer(
+            "⛔ Доступ запрещён.",
+            show_alert=True,
+        )
+        return
+    try:
+        promo_id = int(
+            callback.data.split(":")[1]
+        )
+    except (
+        ValueError,
+        IndexError,
+    ):
+        await callback.answer(
+            "❌ Неверный ID.",
+            show_alert=True,
+        )
+        return
+    async with async_session_factory() as session:
+        promo = await get_promo_by_id(
+            session=session,
+            promo_id=promo_id,
+        )
+        if promo is None:
+            await callback.answer(
+                "❌ Промокод не найден.",
+                show_alert=True,
+            )
+            return
+        stats = await get_promo_stats(
+            session=session,
+            promo_id=promo.id,
+        )
+    limit_text = (
+        str(promo.max_activations)
+        if promo.max_activations is not None
+        else "∞"
+    )
+    percent = 0.0
+    if (
+        promo.max_activations
+        and promo.max_activations > 0
+    ):
+        percent = (
+            stats["total"]
+            / promo.max_activations
+        ) * 100
+    await callback.message.answer(
+        "📊 <b>СТАТИСТИКА ПРОМОКОДА</b>\n\n"
+        f"🎟 Код: <code>{promo.code}</code>\n"
+        f"🎁 Награда: "
+        f"<b>{REWARD_NAMES.get("
+        f"promo.reward_type"
+        f", promo.reward_type)}</b>\n\n"
+        f"🔥 Активаций: "
+        f"<b>{stats['total']}</b>\n"
+        f"👥 Уникальных пользователей: "
+        f"<b>{stats['unique_users']}</b>\n"
+        f"📈 Использовано: "
+        f"<b>{percent:.1f}%</b>\n"
+        f"📊 Лимит: <b>{limit_text}</b>\n"
+        f"🟢 Активен: "
+        f"<b>{'Да' if promo.is_active else 'Нет'}</b>",
+        parse_mode="HTML",
+        reply_markup=promo_view_keyboard(
+            promo
+        ),
+    )
+    await callback.answer()
+# =========================================================
+# 🔴 DEACTIVATE
+# =========================================================
+@router.callback_query(
+    F.data.startswith(
+        "owner_promo_disable:"
+    )
 )
 async def owner_promo_disable(
     callback: CallbackQuery,
@@ -930,9 +1274,7 @@ async def owner_promo_disable(
         return
     try:
         promo_id = int(
-            callback.data.split(
-                ":"
-            )[1]
+            callback.data.split(":")[1]
         )
     except (
         ValueError,
@@ -955,19 +1297,21 @@ async def owner_promo_disable(
         )
         return
     await callback.message.answer(
-        "🔴 <b>Промокод отключён.</b>",
+        "🔴 <b>Промокод отключён.</b>\n\n"
+        "Новые активации этого кода "
+        "больше невозможны.",
         parse_mode="HTML",
     )
     await callback.answer(
         "Промокод отключён."
     )
 # =========================================================
-# PROMO STATISTICS
+# 🔄 BACK TO PROMOS
 # =========================================================
 @router.callback_query(
-    F.data.startswith("owner_promo_stats:")
+    F.data == "owner_promos_back"
 )
-async def owner_promo_stats(
+async def owner_promos_back(
     callback: CallbackQuery,
 ):
     if not await require_owner(
@@ -978,86 +1322,16 @@ async def owner_promo_stats(
             show_alert=True,
         )
         return
-    try:
-        promo_id = int(
-            callback.data.split(
-                ":"
-            )[1]
-        )
-    except (
-        ValueError,
-        IndexError,
-    ):
-        await callback.answer(
-            "❌ Неверный ID.",
-            show_alert=True,
-        )
-        return
     async with async_session_factory() as session:
-        result = await session.execute(
-            select(PromoCode).where(
-                PromoCode.id == promo_id
-            )
+        promos = await list_promos(
+            session=session
         )
-        promo = (
-            result.scalar_one_or_none()
-        )
-        if promo is None:
-            await callback.answer(
-                "❌ Промокод не найден.",
-                show_alert=True,
-            )
-            return
-        count_result = await session.execute(
-            select(
-                func.count(
-                    PromoActivation.id
-                )
-            ).where(
-                PromoActivation.promo_id
-                == promo.id
-            )
-        )
-        activations = int(
-            count_result.scalar_one() or 0
-        )
-        users_result = await session.execute(
-            select(
-                func.count(
-                    func.distinct(
-                        PromoActivation.user_id
-                    )
-                )
-            ).where(
-                PromoActivation.promo_id
-                == promo.id
-            )
-        )
-        unique_users = int(
-            users_result.scalar_one() or 0
-        )
-    limit_text = (
-        str(promo.max_activations)
-        if promo.max_activations is not None
-        else "∞"
-    )
-    percent = 0.0
-    if promo.max_activations:
-        percent = (
-            activations
-            / promo.max_activations
-        ) * 100
     await callback.message.answer(
-        "📊 <b>Статистика промокода</b>\n\n"
-        f"🎟 Код: <code>{promo.code}</code>\n"
-        f"🎁 Награда: "
-        f"<b>{REWARD_NAMES.get(promo.reward_type, promo.reward_type)}</b>\n\n"
-        f"🔥 Активаций: <b>{activations}</b>\n"
-        f"👥 Уникальных пользователей: <b>{unique_users}</b>\n"
-        f"📈 Использовано: <b>{percent:.1f}%</b>\n"
-        f"📊 Лимит: <b>{limit_text}</b>\n"
-        f"🟢 Активен: "
-        f"<b>{'Да' if promo.is_active else 'Нет'}</b>",
+        "🎟 <b>Промокоды TEYZUS</b>\n\n"
+        f"Всего: <b>{len(promos)}</b>",
         parse_mode="HTML",
+        reply_markup=promo_list_keyboard(
+            promos
+        ),
     )
     await callback.answer()
