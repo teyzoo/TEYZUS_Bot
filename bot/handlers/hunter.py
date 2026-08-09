@@ -21,12 +21,13 @@ from services.search_limits import (
     limit_text,
     register_successful_search,
     reset_daily_counter_if_needed,
+    searches_left,
 )
 logger = logging.getLogger("TEYZUS.hunter")
 router = Router()
 hunter = HunterEngine()
 # =========================================================
-# HELPERS
+# USER
 # =========================================================
 async def get_current_user(
     message: Message,
@@ -38,6 +39,9 @@ async def get_current_user(
         session=session,
         telegram_id=message.from_user.id,
     )
+# =========================================================
+# RESULT FORMAT
+# =========================================================
 def format_result(
     result: HunterResult,
 ) -> str:
@@ -70,7 +74,9 @@ def format_results(
             "не найдено.</b>\n\n"
             "Попробуй другой режим поиска."
         )
-    text = f"{title}\n\n"
+    text = (
+        f"{title}\n\n"
+    )
     for index, result in enumerate(
         results,
         start=1,
@@ -80,7 +86,28 @@ def format_results(
             f"{format_result(result)}\n\n"
         )
     return text
-async def check_free_limit(
+# =========================================================
+# LIMIT
+# =========================================================
+def allowed_amount(
+    user,
+    requested: int,
+) -> int:
+    if is_premium(user):
+        return requested
+    reset_daily_counter_if_needed(
+        user
+    )
+    remaining = searches_left(
+        user
+    )
+    if remaining is None:
+        return requested
+    return min(
+        requested,
+        remaining,
+    )
+async def ensure_search_allowed(
     message: Message,
     user,
 ) -> bool:
@@ -90,7 +117,9 @@ async def check_free_limit(
             "Попробуй снова через /start."
         )
         return False
-    reset_daily_counter_if_needed(user)
+    reset_daily_counter_if_needed(
+        user
+    )
     if can_search(user):
         return True
     await message.answer(
@@ -98,35 +127,59 @@ async def check_free_limit(
         "Бесплатный пользователь может "
         "найти до <b>5 свободных username "
         "в сутки</b>.\n\n"
-        "💎 TEYZUS Premium открывает "
-        "<b>♾️ безлимитный поиск</b>.",
+        "💎 <b>TEYZUS Premium</b>\n"
+        "♾️ Безлимитный поиск\n"
+        "🔤 5 символов\n"
+        "📖 Dictionary\n"
+        "🎯 Mask Search\n"
+        "🚨 Trap",
         parse_mode="HTML",
     )
     return False
-async def run_search_and_register(
+# =========================================================
+# SEARCH EXECUTION
+# =========================================================
+async def execute_search(
     message: Message,
     session: AsyncSession,
     user,
-    search_coro,
-):
+    search,
+    requested_amount: int,
+    title: str,
+) -> None:
+    amount = allowed_amount(
+        user,
+        requested_amount,
+    )
+    if amount <= 0:
+        await message.answer(
+            "🚫 <b>Лимит поиска исчерпан.</b>\n\n"
+            "💎 TEYZUS Premium открывает "
+            "♾️ безлимитный поиск.",
+            parse_mode="HTML",
+        )
+        return
     progress = await message.answer(
         "🔎 <b>TEYZUS Hunter</b>\n\n"
         "⚙️ Генерирую красивые username...\n"
-        "⏳ Проверяю доступность...",
+        "⏳ Проверяю Telegram...\n"
+        "⏳ Проверяю t.me...",
         parse_mode="HTML",
     )
     try:
-        results = await search_coro
+        results = await search(
+            amount=amount
+        )
     except Exception:
         logger.exception(
-            "Hunter search error"
+            "Hunter search failed"
         )
         try:
             await progress.delete()
         except Exception:
             pass
         await message.answer(
-            "⚠️ <b>Произошла ошибка поиска.</b>\n\n"
+            "⚠️ <b>Ошибка Hunter.</b>\n\n"
             "Попробуй ещё раз.",
             parse_mode="HTML",
         )
@@ -135,7 +188,12 @@ async def run_search_and_register(
         await progress.delete()
     except Exception:
         pass
-    found_count = len(results)
+    found_count = len(
+        results
+    )
+    # -----------------------------------------------------
+    # Учитываем только реально найденные username.
+    # -----------------------------------------------------
     if found_count > 0:
         await register_successful_search(
             session=session,
@@ -145,27 +203,30 @@ async def run_search_and_register(
     await message.answer(
         format_results(
             results,
-            "🔎 <b>TEYZUS HUNTER</b>",
+            title,
         ),
         parse_mode="HTML",
     )
+    # -----------------------------------------------------
+    # LIMIT STATUS
+    # -----------------------------------------------------
     if is_premium(user):
-        footer = (
-            "\n💎 Premium: <b>♾️ безлимитный поиск</b>"
+        await message.answer(
+            "💎 Premium: <b>♾️ безлимитный поиск</b>",
+            parse_mode="HTML",
         )
     else:
-        remaining = max(
-            0,
-            5 - user.successful_searches_today,
+        reset_daily_counter_if_needed(
+            user
         )
-        footer = (
-            "\n🔢 Осталось сегодня: "
-            f"<b>{remaining}/5</b>"
+        remaining = searches_left(
+            user
         )
-    await message.answer(
-        footer,
-        parse_mode="HTML",
-    )
+        await message.answer(
+            "🔢 Лимит сегодня: "
+            f"<b>{remaining}/5</b>",
+            parse_mode="HTML",
+        )
 # =========================================================
 # 6 SYMBOL
 # =========================================================
@@ -181,13 +242,14 @@ async def hunter_6(
         HunterSearchState.length_6
     )
     await callback.message.answer(
-        "🔎 <b>Поиск красивых username</b>\n\n"
-        "Длина: <b>6 символов</b>\n\n"
-        "TEYZUS сам создаст красивые "
-        "варианты, отфильтрует мусор "
-        "и проверит доступность.\n\n"
-        "Отправь количество результатов "
-        "от <b>1 до 100</b>.",
+        "🔎 <b>6 SYMBOL HUNTER</b>\n\n"
+        "TEYZUS сам генерирует красивые "
+        "username и проверяет их "
+        "доступность.\n\n"
+        "Можно указать от "
+        "<b>1 до 100</b> результатов.\n\n"
+        "Для Free действует лимит "
+        "<b>5 найденных username в сутки</b>.",
         parse_mode="HTML",
     )
     await callback.answer()
@@ -198,44 +260,46 @@ async def hunter_6_count(
     message: Message,
     state: FSMContext,
 ):
+    try:
+        requested = int(
+            message.text.strip()
+        )
+    except (
+        ValueError,
+        AttributeError,
+    ):
+        await message.answer(
+            "❌ Введи число от 1 до 100."
+        )
+        return
+    if not 1 <= requested <= 100:
+        await message.answer(
+            "❌ Количество должно быть "
+            "от 1 до 100."
+        )
+        return
+    await state.clear()
     async with get_session() as session:
         user = await get_current_user(
             message,
             session,
         )
-        if not await check_free_limit(
+        if not await ensure_search_allowed(
             message,
             user,
         ):
-            await state.clear()
             return
-        try:
-            limit = int(
-                message.text.strip()
-            )
-        except (
-            ValueError,
-            AttributeError,
-        ):
-            await message.answer(
-                "❌ Введи число от 1 до 100."
-            )
-            return
-        if not 1 <= limit <= 100:
-            await message.answer(
-                "❌ Количество должно быть "
-                "от 1 до 100."
-            )
-            return
-        await state.clear()
-        await run_search_and_register(
+        await execute_search(
             message=message,
             session=session,
             user=user,
-            search_coro=hunter.search(
-                length=6,
-                amount=limit,
-            ),
+            search=lambda amount:
+                hunter.search(
+                    length=6,
+                    amount=amount,
+                ),
+            requested_amount=requested,
+            title="🔎 <b>6 SYMBOL HUNTER</b>",
         )
 # =========================================================
 # 5 SYMBOL PREMIUM
@@ -252,11 +316,10 @@ async def hunter_5(
         HunterSearchState.length_5
     )
     await callback.message.answer(
-        "💎 <b>Premium Hunter</b>\n\n"
-        "Длина: <b>5 символов</b>\n\n"
-        "Доступно только Premium.\n\n"
-        "Укажи количество результатов "
-        "от <b>1 до 100</b>.",
+        "💎 <b>5 SYMBOL HUNTER</b>\n\n"
+        "Поиск 5-символьных username.\n\n"
+        "🔒 Только для TEYZUS Premium.\n\n"
+        "Количество: <b>1–100</b>.",
         parse_mode="HTML",
     )
     await callback.answer()
@@ -267,6 +330,25 @@ async def hunter_5_count(
     message: Message,
     state: FSMContext,
 ):
+    try:
+        requested = int(
+            message.text.strip()
+        )
+    except (
+        ValueError,
+        AttributeError,
+    ):
+        await message.answer(
+            "❌ Введи число от 1 до 100."
+        )
+        return
+    if not 1 <= requested <= 100:
+        await message.answer(
+            "❌ Количество должно быть "
+            "от 1 до 100."
+        )
+        return
+    await state.clear()
     async with get_session() as session:
         user = await get_current_user(
             message,
@@ -276,45 +358,26 @@ async def hunter_5_count(
             await message.answer(
                 "❌ Профиль не найден."
             )
-            await state.clear()
             return
         if not is_premium(user):
             await message.answer(
-                "💎 <b>Эта функция доступна "
-                "только TEYZUS Premium.</b>\n\n"
-                "5-символьный поиск входит "
-                "в Premium.",
+                "💎 <b>TEYZUS Premium</b>\n\n"
+                "5-символьный поиск доступен "
+                "только Premium.",
                 parse_mode="HTML",
             )
-            await state.clear()
             return
-        try:
-            limit = int(
-                message.text.strip()
-            )
-        except (
-            ValueError,
-            AttributeError,
-        ):
-            await message.answer(
-                "❌ Введи число от 1 до 100."
-            )
-            return
-        if not 1 <= limit <= 100:
-            await message.answer(
-                "❌ Количество должно быть "
-                "от 1 до 100."
-            )
-            return
-        await state.clear()
-        await run_search_and_register(
+        await execute_search(
             message=message,
             session=session,
             user=user,
-            search_coro=hunter.premium(
-                length=5,
-                amount=limit,
-            ),
+            search=lambda amount:
+                hunter.premium(
+                    length=5,
+                    amount=amount,
+                ),
+            requested_amount=requested,
+            title="💎 <b>5 SYMBOL PREMIUM</b>",
         )
 # =========================================================
 # DICTIONARY
@@ -331,15 +394,11 @@ async def hunter_dictionary(
         HunterSearchState.dictionary
     )
     await callback.message.answer(
-        "📖 <b>Dictionary Search</b>\n\n"
-        "TEYZUS будет искать реальные "
-        "слова и красивые коммерческие "
-        "username.\n\n"
-        "Введи длину:\n\n"
-        "<code>5</code>\n"
-        "<code>6</code>\n"
-        "<code>7</code>\n\n"
-        "Функция доступна Premium.",
+        "📖 <b>DICTIONARY HUNTER</b>\n\n"
+        "TEYZUS ищет реальные слова "
+        "и красивые коммерческие username.\n\n"
+        "🔒 Только Premium.\n\n"
+        "Укажи длину от <b>5 до 32</b>.",
         parse_mode="HTML",
     )
     await callback.answer()
@@ -350,6 +409,25 @@ async def hunter_dictionary_length(
     message: Message,
     state: FSMContext,
 ):
+    try:
+        length = int(
+            message.text.strip()
+        )
+    except (
+        ValueError,
+        AttributeError,
+    ):
+        await message.answer(
+            "❌ Введи длину от 5 до 32."
+        )
+        return
+    if not 5 <= length <= 32:
+        await message.answer(
+            "❌ Длина должна быть "
+            "от 5 до 32."
+        )
+        return
+    await state.clear()
     async with get_session() as session:
         user = await get_current_user(
             message,
@@ -359,44 +437,26 @@ async def hunter_dictionary_length(
             await message.answer(
                 "❌ Профиль не найден."
             )
-            await state.clear()
             return
         if not is_premium(user):
             await message.answer(
-                "💎 <b>Dictionary Hunter</b>\n\n"
-                "Эта функция доступна "
+                "💎 <b>TEYZUS Premium</b>\n\n"
+                "Dictionary доступен "
                 "только Premium.",
                 parse_mode="HTML",
             )
-            await state.clear()
             return
-        try:
-            length = int(
-                message.text.strip()
-            )
-        except (
-            ValueError,
-            AttributeError,
-        ):
-            await message.answer(
-                "❌ Введи длину от 5 до 32."
-            )
-            return
-        if not 5 <= length <= 32:
-            await message.answer(
-                "❌ Длина должна быть "
-                "от 5 до 32."
-            )
-            return
-        await state.clear()
-        await run_search_and_register(
+        await execute_search(
             message=message,
             session=session,
             user=user,
-            search_coro=hunter.dictionary(
-                length=length,
-                amount=10,
-            ),
+            search=lambda amount:
+                hunter.dictionary(
+                    length=length,
+                    amount=amount,
+                ),
+            requested_amount=10,
+            title="📖 <b>DICTIONARY HUNTER</b>",
         )
 # =========================================================
 # MASK
@@ -413,15 +473,14 @@ async def hunter_mask(
         HunterMaskState.mask
     )
     await callback.message.answer(
-        "🎯 <b>Поиск по маске</b>\n\n"
+        "🎯 <b>MASK HUNTER</b>\n\n"
         "Используй <code>?</code> "
         "для неизвестной буквы.\n\n"
         "Примеры:\n"
         "<code>?nova?</code>\n"
         "<code>v?l?r?</code>\n"
         "<code>?a??a?</code>\n\n"
-        "Длина: <b>5–32</b>.\n\n"
-        "Функция доступна Premium.",
+        "🔒 Только Premium.",
         parse_mode="HTML",
     )
     await callback.answer()
@@ -432,6 +491,21 @@ async def hunter_mask_input(
     message: Message,
     state: FSMContext,
 ):
+    mask = (
+        message.text.strip()
+        if message.text
+        else ""
+    )
+    if not validate_mask(mask):
+        await message.answer(
+            "❌ Неверная маска.\n\n"
+            "Используй английские буквы "
+            "и <code>?</code>.\n\n"
+            "Длина: 5–32.",
+            parse_mode="HTML",
+        )
+        return
+    await state.clear()
     async with get_session() as session:
         user = await get_current_user(
             message,
@@ -441,40 +515,26 @@ async def hunter_mask_input(
             await message.answer(
                 "❌ Профиль не найден."
             )
-            await state.clear()
             return
         if not is_premium(user):
             await message.answer(
-                "💎 <b>Mask Hunter</b>\n\n"
-                "Эта функция доступна "
+                "💎 <b>TEYZUS Premium</b>\n\n"
+                "Mask Search доступен "
                 "только Premium.",
                 parse_mode="HTML",
             )
-            await state.clear()
             return
-        mask = (
-            message.text.strip()
-            if message.text
-            else ""
-        )
-        if not validate_mask(mask):
-            await message.answer(
-                "❌ Неверная маска.\n\n"
-                "Используй английские буквы "
-                "и символ <code>?</code>.\n\n"
-                "Длина: 5–32.",
-                parse_mode="HTML",
-            )
-            return
-        await state.clear()
-        await run_search_and_register(
+        await execute_search(
             message=message,
             session=session,
             user=user,
-            search_coro=hunter.mask(
-                mask=mask,
-                amount=10,
-            ),
+            search=lambda amount:
+                hunter.mask(
+                    mask=mask,
+                    amount=amount,
+                ),
+            requested_amount=10,
+            title="🎯 <b>MASK HUNTER</b>",
         )
 # =========================================================
 # POPULAR
@@ -486,7 +546,7 @@ async def hunter_popular(
     callback: CallbackQuery,
 ):
     progress = await callback.message.answer(
-        "🔥 <b>Popular Hunter</b>\n\n"
+        "🔥 <b>POPULAR HUNTER</b>\n\n"
         "⚙️ Ищу красивые username...\n"
         "⏳ Проверяю доступность...",
         parse_mode="HTML",
@@ -501,7 +561,7 @@ async def hunter_popular(
         )
         await progress.delete()
         await callback.message.answer(
-            "⚠️ Ошибка поиска.",
+            "⚠️ Ошибка поиска."
         )
         await callback.answer()
         return
@@ -524,9 +584,8 @@ async def hunter_expensive(
     callback: CallbackQuery,
 ):
     progress = await callback.message.answer(
-        "💎 <b>Expensive Hunter</b>\n\n"
-        "⚙️ Ищу дорогие и перспективные "
-        "username...\n"
+        "💎 <b>EXPENSIVE HUNTER</b>\n\n"
+        "⚙️ Ищу редкие и дорогие username...\n"
         "⏳ Проверяю доступность...",
         parse_mode="HTML",
     )
@@ -540,7 +599,7 @@ async def hunter_expensive(
         )
         await progress.delete()
         await callback.message.answer(
-            "⚠️ Ошибка поиска.",
+            "⚠️ Ошибка поиска."
         )
         await callback.answer()
         return
