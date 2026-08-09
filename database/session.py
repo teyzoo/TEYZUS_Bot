@@ -71,18 +71,15 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 # =========================================================
 
 async def init_database() -> None:
-    """
-    Создаёт все таблицы из SQLAlchemy-моделей.
+    # Важно импортировать весь models.py,
+    # чтобы SQLAlchemy зарегистрировал
+    # ВСЕ таблицы TEYZUS.
+    import database.models  # noqa: F401
 
-    Важно:
-    модели должны быть импортированы ДО create_all(),
-    иначе SQLAlchemy может не знать о некоторых таблицах.
-    """
-
-    # Импортируем модели, чтобы они зарегистрировались
-    # в Base.metadata.
-    from database.models import (
-        User,
+    async with engine.begin() as connection:
+        await connection.run_sync(
+            Base.metadata.create_all
+        )
         PromoCode,
         PromoActivation,
         Task,
