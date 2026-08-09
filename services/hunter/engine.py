@@ -10,6 +10,9 @@ from services.hunter.telegram_checker import (
 from services.hunter.tme_checker import (
     check_tme,
 )
+from services.hunter.fragment_checker import (
+    fragment_checker,
+)
 
 
 # =========================================================
@@ -38,6 +41,7 @@ class HunterResult:
         return (
             self.telegram_available
             and self.tme_available
+            and self.fragment_available
         )
 
 
@@ -119,9 +123,15 @@ class HunterEngine:
         amount: int,
     ) -> list[str]:
 
-        from services.hunter.generator import (
-            generate_candidates,
-        )
+        try:
+
+            from services.hunter.generator import (
+                generate_candidates,
+            )
+
+        except ImportError:
+
+            return []
 
         candidates = generate_candidates(
             length=length,
@@ -129,7 +139,6 @@ class HunterEngine:
         )
 
         result: list[str] = []
-
         seen: set[str] = set()
 
         for username in candidates:
@@ -150,7 +159,6 @@ class HunterEngine:
                 continue
 
             seen.add(username)
-
             result.append(username)
 
         return result
@@ -173,6 +181,10 @@ class HunterEngine:
                 )
 
                 return bool(result)
+
+            except asyncio.CancelledError:
+
+                raise
 
             except Exception:
 
@@ -197,6 +209,10 @@ class HunterEngine:
 
                 return bool(result)
 
+            except asyncio.CancelledError:
+
+                raise
+
             except Exception:
 
                 return False
@@ -210,15 +226,21 @@ class HunterEngine:
         username: str,
     ) -> bool:
 
-        # Fragment checker подключим отдельно.
-        #
-        # Пока возвращаем True, чтобы отсутствие
-        # отдельного Fragment checker не ломало Hunter.
-        #
-        # После подключения реального Fragment API
-        # этот метод заменим.
+        try:
 
-        return True
+            result = await fragment_checker.check(
+                username
+            )
+
+            return result is True
+
+        except asyncio.CancelledError:
+
+            raise
+
+        except Exception:
+
+            return False
 
     # =====================================================
     # CHECK ONE CANDIDATE
@@ -237,6 +259,10 @@ class HunterEngine:
             username
         ):
             return None
+
+        # -------------------------------------------------
+        # START ALL CHECKS IN PARALLEL
+        # -------------------------------------------------
 
         telegram_task = asyncio.create_task(
             self._check_telegram(
@@ -266,6 +292,10 @@ class HunterEngine:
             fragment_task,
         )
 
+        # -------------------------------------------------
+        # ALL THREE SOURCES MUST CONFIRM
+        # -------------------------------------------------
+
         if not telegram_available:
             return None
 
@@ -275,21 +305,20 @@ class HunterEngine:
         if not fragment_available:
             return None
 
+        # -------------------------------------------------
+        # RESULT
+        # -------------------------------------------------
+
         result = HunterResult(
             username=username,
-
-            telegram_available=(
-                telegram_available
-            ),
-
-            tme_available=(
-                tme_available
-            ),
-
-            fragment_available=(
-                fragment_available
-            ),
+            telegram_available=True,
+            tme_available=True,
+            fragment_available=True,
         )
+
+        # -------------------------------------------------
+        # ANALYSIS
+        # -------------------------------------------------
 
         self._calculate_scores(
             result
@@ -311,6 +340,9 @@ class HunterEngine:
         amount: int,
     ) -> list[HunterResult]:
 
+        if amount <= 0:
+            return []
+
         candidates = list(
             candidates
         )
@@ -318,61 +350,107 @@ class HunterEngine:
         if not candidates:
             return []
 
+        # -------------------------------------------------
+        # NORMALIZE + REMOVE DUPLICATES
+        # -------------------------------------------------
+
+        prepared: list[str] = []
+        seen: set[str] = set()
+
+        for username in candidates:
+
+            username = self.normalize(
+                username
+            )
+
+            if not self.valid_username(
+                username
+            ):
+                continue
+
+            if username in seen:
+                continue
+
+            seen.add(username)
+            prepared.append(username)
+
+        if not prepared:
+            return []
+
+        # -------------------------------------------------
+        # CREATE TASKS
+        # -------------------------------------------------
+
         tasks = [
             asyncio.create_task(
                 self.check_candidate(
                     username
                 )
             )
-            for username in candidates
+            for username in prepared
         ]
 
         results: list[HunterResult] = []
 
-        for task in asyncio.as_completed(
-            tasks
-        ):
+        try:
 
-            try:
+            for task in asyncio.as_completed(
+                tasks
+            ):
 
-                result = await task
+                try:
 
-            except asyncio.CancelledError:
+                    result = await task
 
-                raise
+                except asyncio.CancelledError:
 
-            except Exception:
+                    raise
 
-                continue
+                except Exception:
 
-            if result is None:
-                continue
+                    continue
 
-            results.append(
-                result
-            )
+                if result is None:
+                    continue
 
-            if len(results) >= amount:
+                results.append(
+                    result
+                )
 
-                for pending in tasks:
+                # -------------------------------------------------
+                # STOP WHEN ENOUGH RESULTS FOUND
+                # -------------------------------------------------
 
-                    if not pending.done():
+                if len(results) >= amount:
 
-                        pending.cancel()
+                    for pending in tasks:
 
-                break
+                        if not pending.done():
 
-        if results:
+                            pending.cancel()
+
+                    break
+
+        finally:
 
             await asyncio.gather(
                 *tasks,
                 return_exceptions=True,
             )
 
+        # -------------------------------------------------
+        # SORT BY BEAUTY
+        # -------------------------------------------------
+
+        results.sort(
+            key=lambda item: item.beauty_score,
+            reverse=True,
+        )
+
         return results[:amount]
 
     # =====================================================
-    # SCORE
+    # SCORE CALCULATION
     # =====================================================
 
     @staticmethod
@@ -381,7 +459,6 @@ class HunterEngine:
     ) -> None:
 
         username = result.username
-
         length = len(username)
 
         # -------------------------------------------------
@@ -391,27 +468,26 @@ class HunterEngine:
         readability = 5.0
 
         if username.isalpha():
-
             readability += 2.0
 
         if username.islower():
-
             readability += 0.5
 
         if "_" not in username:
-
             readability += 0.5
 
         if not any(
             char.isdigit()
             for char in username
         ):
-
             readability += 1.0
 
-        result.readability = min(
-            readability,
-            10.0,
+        result.readability = round(
+            min(
+                readability,
+                10.0,
+            ),
+            2,
         )
 
         # -------------------------------------------------
@@ -421,24 +497,23 @@ class HunterEngine:
         rarity = 4.0
 
         if length == 5:
-
             rarity += 3.0
 
         elif length == 6:
-
             rarity += 2.0
 
         elif length <= 8:
-
             rarity += 1.0
 
         if username.isalpha():
-
             rarity += 1.0
 
-        result.rarity = min(
-            rarity,
-            10.0,
+        result.rarity = round(
+            min(
+                rarity,
+                10.0,
+            ),
+            2,
         )
 
         # -------------------------------------------------
@@ -453,24 +528,23 @@ class HunterEngine:
         )
 
         if vowels >= 1:
-
             brand += 1.0
 
         if vowels >= 2:
-
             brand += 1.0
 
         if username.isalpha():
-
             brand += 1.0
 
         if "_" not in username:
-
             brand += 1.0
 
-        result.brand = min(
-            brand,
-            10.0,
+        result.brand = round(
+            min(
+                brand,
+                10.0,
+            ),
+            2,
         )
 
         # -------------------------------------------------
@@ -492,14 +566,14 @@ class HunterEngine:
         )
 
         # -------------------------------------------------
-        # BEAUTY
+        # BEAUTY SCORE
         # -------------------------------------------------
 
         beauty = (
-            result.readability * 0.4
-            + result.rarity * 0.2
-            + result.liquidity * 0.2
-            + result.brand * 0.2
+            result.readability * 0.40
+            + result.rarity * 0.20
+            + result.liquidity * 0.20
+            + result.brand * 0.20
         )
 
         result.beauty_score = round(
@@ -511,7 +585,7 @@ class HunterEngine:
         )
 
     # =====================================================
-    # PRICE
+    # PRICE CALCULATION
     # =====================================================
 
     @staticmethod
@@ -545,3 +619,12 @@ class HunterEngine:
 
             result.price_min = 500
             result.price_max = 10_000
+
+
+# =========================================================
+# SINGLETON
+# =========================================================
+
+hunter_engine = HunterEngine(
+    max_concurrency=20
+)
