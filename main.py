@@ -56,6 +56,9 @@ from bot.handlers.admin_cases import (
     router as admin_cases_router,
 )
 
+from bot.handlers.tasks import (
+    router as tasks_router,
+)
 
 # =========================================================
 # LOGGING
