@@ -1,5 +1,7 @@
-from database.repositories.shop import ShopRepository
+from database.repositories.tasks import (
+    TaskRepository,
+)
 
 __all__ = [
-    "ShopRepository",
+    "TaskRepository",
 ]
