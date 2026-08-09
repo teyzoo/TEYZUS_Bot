@@ -60,7 +60,10 @@ from bot.handlers.tasks import (
     router as tasks_router,
 )
 
-from backend.shop import router as shop_router
+from backend.shop import (
+    router as shop_router,
+)
+
 # =========================================================
 # LOGGING
 # =========================================================
