@@ -160,3 +160,49 @@ export interface ShopFilters {
     | "price_desc"
     | "popular";
 }
+
+// =========================================================
+// TASKS
+// =========================================================
+
+export type TaskPeriod =
+  | "daily"
+  | "weekly"
+  | "monthly"
+  | "permanent";
+
+export interface TaskItem {
+  id: number;
+
+  title: string;
+
+  description: string | null;
+
+  task_type: string;
+
+  target_value: string | null;
+
+  reward_type: string;
+
+  reward_amount: number;
+
+  premium_days: number;
+
+  period: TaskPeriod;
+
+  repeatable: boolean;
+
+  completed: boolean;
+
+  completions: number;
+
+  max_completions_per_user:
+    | number
+    | null;
+
+  only_premium: boolean;
+
+  image_file_id:
+    | string
+    | null;
+}
