@@ -2,85 +2,40 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    Query,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from database.models import User
-from database.repositories.shop import ShopRepository
-from database.session import get_session
+from backend.telegram_auth import (
+    get_current_user,
+)
+from database.models import (
+    ShopCartItem,
+    ShopListing,
+    User,
+)
+from database.repositories.shop import (
+    ShopRepository,
+)
+from database.session import (
+    get_session,
+)
 
 
 router = APIRouter(
     prefix="/api/miniapp/shop",
-    tags=["TEYZUS SHOP"],
+    tags=[
+        "TEYZUS SHOP"
+    ],
 )
 
 
 # =========================================================
-# TELEGRAM USER
-# =========================================================
-
-async def get_current_user(
-    telegram_init_data: Optional[str],
-) -> User:
-
-    if not telegram_init_data:
-        raise HTTPException(
-            status_code=401,
-            detail="Telegram authorization required",
-        )
-
-    # -----------------------------------------------------
-    # ВАЖНО
-    # -----------------------------------------------------
-    # На следующем этапе здесь будет полноценная проверка
-    # Telegram WebApp initData через BOT TOKEN.
-    #
-    # Пока ожидаем Telegram ID из заголовка после
-    # подключения middleware авторизации.
-    #
-    # Этот участок НЕ должен использоваться как финальная
-    # защита production API.
-    # -----------------------------------------------------
-
-    try:
-        telegram_id = int(
-            telegram_init_data
-        )
-    except (TypeError, ValueError):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid Telegram authorization",
-        )
-
-    async with get_session() as session:
-
-        result = await session.execute(
-            select(User).where(
-                User.telegram_id == telegram_id
-            )
-        )
-
-        user = result.scalar_one_or_none()
-
-        if user is None:
-            raise HTTPException(
-                status_code=404,
-                detail="User not found",
-            )
-
-        if user.is_blocked:
-            raise HTTPException(
-                status_code=403,
-                detail="User blocked",
-            )
-
-        return user
-
-
-# =========================================================
-# RESPONSE SCHEMA
+# RESPONSE MODELS
 # =========================================================
 
 class ShopListingResponse(
@@ -127,6 +82,77 @@ class ShopResponse(
     per_page: int
 
 
+class ShopListingDetailResponse(
+    ShopListingResponse
+):
+    views: int
+
+    favorites_count: int
+
+    status: str
+
+
+class CartItemResponse(
+    BaseModel
+):
+    listing_id: int
+
+    username: str
+
+    title: str
+
+    price_rub: int
+
+    price_stars: Optional[int]
+
+
+class CartResponse(
+    BaseModel
+):
+    items: list[
+        CartItemResponse
+    ]
+
+    total_rub: int
+
+    total_stars: int
+
+
+class CreateListingRequest(
+    BaseModel
+):
+    username: str = Field(
+        min_length=1,
+        max_length=255,
+    )
+
+    title: str = Field(
+        min_length=1,
+        max_length=255,
+    )
+
+    description: Optional[str] = Field(
+        default=None,
+        max_length=5000,
+    )
+
+    price_rub: int = Field(
+        ge=1,
+    )
+
+    price_stars: Optional[int] = Field(
+        default=None,
+        ge=1,
+    )
+
+    category: Optional[str] = Field(
+        default=None,
+        max_length=64,
+    )
+
+    is_premium: bool = False
+
+
 # =========================================================
 # LISTINGS
 # =========================================================
@@ -136,6 +162,11 @@ class ShopResponse(
     response_model=ShopResponse,
 )
 async def get_shop(
+    user: User = __import__(
+        "fastapi"
+    ).Depends(
+        get_current_user
+    ),
     search: str = Query(
         default="",
         max_length=100,
@@ -155,19 +186,7 @@ async def get_shop(
         ge=1,
         le=100,
     ),
-    x_telegram_init_data: Optional[
-        str
-    ] = Header(
-        default=None,
-    ),
 ):
-    """
-    Получение объявлений TEYZUS SHOP.
-    """
-
-    user = await get_current_user(
-        x_telegram_init_data
-    )
 
     allowed_categories = {
         "all",
@@ -177,15 +196,15 @@ async def get_shop(
         "premium",
     }
 
-    if category not in allowed_categories:
-        category = "all"
-
     allowed_sorts = {
         "new",
         "price_asc",
         "price_desc",
         "popular",
     }
+
+    if category not in allowed_categories:
+        category = "all"
 
     if sort not in allowed_sorts:
         sort = "new"
@@ -200,11 +219,10 @@ async def get_shop(
                 sort=sort,
                 page=page,
                 per_page=per_page,
-                user_id=user.id,
             )
         )
 
-        response_items = []
+        items = []
 
         for listing in listings:
 
@@ -229,7 +247,7 @@ async def get_shop(
                 )
             )
 
-            response_items.append(
+            items.append(
                 ShopListingResponse(
                     id=listing.id,
                     username=listing.username,
@@ -252,7 +270,7 @@ async def get_shop(
             )
 
         return ShopResponse(
-            items=response_items,
+            items=items,
             total=total,
             page=page,
             per_page=per_page,
@@ -260,28 +278,154 @@ async def get_shop(
 
 
 # =========================================================
-# FAVORITE
+# LISTING DETAILS
 # =========================================================
 
-@router.post(
-    "/{listing_id}/favorite"
+@router.get(
+    "/{listing_id}",
+    response_model=ShopListingDetailResponse,
 )
-async def add_favorite(
+async def get_listing(
     listing_id: int,
-    x_telegram_init_data: Optional[
-        str
-    ] = Header(
-        default=None,
+    user: User = __import__(
+        "fastapi"
+    ).Depends(
+        get_current_user
     ),
 ):
-    user = await get_current_user(
-        x_telegram_init_data
-    )
 
     async with get_session() as session:
 
         listing = (
-            await ShopRepository.get_listing(
+            await ShopRepository.get_active_listing(
+                session,
+                listing_id,
+            )
+        )
+
+        if listing is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Listing not found",
+            )
+
+        await ShopRepository.increment_views(
+            session,
+            listing_id,
+        )
+
+        seller_result = (
+            await session.execute(
+                select(User).where(
+                    User.id
+                    == listing.seller_id
+                )
+            )
+        )
+
+        seller = (
+            seller_result.scalar_one_or_none()
+        )
+
+        favorite = (
+            await ShopRepository.is_favorite(
+                session,
+                user_id=user.id,
+                listing_id=listing.id,
+            )
+        )
+
+        await session.commit()
+
+        return ShopListingDetailResponse(
+            id=listing.id,
+            username=listing.username,
+            title=listing.title,
+            description=listing.description,
+            price_rub=listing.price_rub,
+            price_stars=listing.price_stars,
+            seller_id=listing.seller_id,
+            seller_username=(
+                seller.username
+                if seller
+                else None
+            ),
+            category=listing.category,
+            is_premium=listing.is_premium,
+            is_verified=listing.is_verified,
+            is_favorite=favorite,
+            created_at=listing.created_at.isoformat(),
+            views=listing.views,
+            favorites_count=listing.favorites_count,
+            status=listing.status,
+        )
+
+
+# =========================================================
+# CREATE LISTING
+# =========================================================
+
+@router.post(
+    "/listings",
+)
+async def create_listing(
+    data: CreateListingRequest,
+    user: User = __import__(
+        "fastapi"
+    ).Depends(
+        get_current_user
+    ),
+):
+
+    async with get_session() as session:
+
+        listing = (
+            await ShopRepository.create_listing(
+                session,
+                seller_id=user.id,
+                username=data.username,
+                title=data.title,
+                description=data.description,
+                price_rub=data.price_rub,
+                price_stars=data.price_stars,
+                category=data.category,
+                is_premium=data.is_premium,
+            )
+        )
+
+        await session.commit()
+
+        return {
+            "success": True,
+            "listing_id": listing.id,
+            "status": "pending",
+            "message": (
+                "Объявление отправлено "
+                "на модерацию."
+            ),
+        }
+
+
+# =========================================================
+# FAVORITE
+# =========================================================
+
+@router.post(
+    "/{listing_id}/favorite",
+)
+async def add_favorite(
+    listing_id: int,
+    user: User = __import__(
+        "fastapi"
+    ).Depends(
+        get_current_user
+    ),
+):
+
+    async with get_session() as session:
+
+        listing = (
+            await ShopRepository.get_active_listing(
                 session,
                 listing_id,
             )
@@ -311,19 +455,16 @@ async def add_favorite(
 # =========================================================
 
 @router.delete(
-    "/{listing_id}/favorite"
+    "/{listing_id}/favorite",
 )
 async def remove_favorite(
     listing_id: int,
-    x_telegram_init_data: Optional[
-        str
-    ] = Header(
-        default=None,
+    user: User = __import__(
+        "fastapi"
+    ).Depends(
+        get_current_user
     ),
 ):
-    user = await get_current_user(
-        x_telegram_init_data
-    )
 
     async with get_session() as session:
 
@@ -331,6 +472,210 @@ async def remove_favorite(
             session,
             user_id=user.id,
             listing_id=listing_id,
+        )
+
+        await session.commit()
+
+        return {
+            "success": True
+        }
+
+
+# =========================================================
+# ADD TO CART
+# =========================================================
+
+@router.post(
+    "/{listing_id}/cart",
+)
+async def add_to_cart(
+    listing_id: int,
+    user: User = __import__(
+        "fastapi"
+    ).Depends(
+        get_current_user
+    ),
+):
+
+    async with get_session() as session:
+
+        listing = (
+            await ShopRepository.get_active_listing(
+                session,
+                listing_id,
+            )
+        )
+
+        if listing is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Listing not found",
+            )
+
+        if listing.seller_id == user.id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Нельзя добавить "
+                    "своё объявление."
+                ),
+            )
+
+        added = (
+            await ShopRepository.add_to_cart(
+                session,
+                user_id=user.id,
+                listing_id=listing_id,
+            )
+        )
+
+        await session.commit()
+
+        return {
+            "success": True,
+            "added": added,
+        }
+
+
+# =========================================================
+# REMOVE FROM CART
+# =========================================================
+
+@router.delete(
+    "/{listing_id}/cart",
+)
+async def remove_from_cart(
+    listing_id: int,
+    user: User = __import__(
+        "fastapi"
+    ).Depends(
+        get_current_user
+    ),
+):
+
+    async with get_session() as session:
+
+        removed = (
+            await ShopRepository.remove_from_cart(
+                session,
+                user_id=user.id,
+                listing_id=listing_id,
+            )
+        )
+
+        await session.commit()
+
+        return {
+            "success": True,
+            "removed": removed,
+        }
+
+
+# =========================================================
+# GET CART
+# =========================================================
+
+@router.get(
+    "/cart/current",
+    response_model=CartResponse,
+)
+async def get_cart(
+    user: User = __import__(
+        "fastapi"
+    ).Depends(
+        get_current_user
+    ),
+):
+
+    async with get_session() as session:
+
+        result = await session.execute(
+            select(
+                ShopCartItem
+            ).where(
+                ShopCartItem.user_id
+                == user.id
+            )
+        )
+
+        cart_items = list(
+            result.scalars().all()
+        )
+
+        items = []
+
+        total_rub = 0
+        total_stars = 0
+
+        for cart_item in cart_items:
+
+            listing = (
+                await ShopRepository.get_active_listing(
+                    session,
+                    cart_item.listing_id,
+                )
+            )
+
+            # Если объявление удалили,
+            # автоматически убираем его
+            # из корзины.
+
+            if listing is None:
+
+                await session.delete(
+                    cart_item
+                )
+
+                continue
+
+            items.append(
+                CartItemResponse(
+                    listing_id=listing.id,
+                    username=listing.username,
+                    title=listing.title,
+                    price_rub=listing.price_rub,
+                    price_stars=listing.price_stars,
+                )
+            )
+
+            total_rub += (
+                listing.price_rub
+            )
+
+            if listing.price_stars:
+                total_stars += (
+                    listing.price_stars
+                )
+
+        await session.commit()
+
+        return CartResponse(
+            items=items,
+            total_rub=total_rub,
+            total_stars=total_stars,
+        )
+
+
+# =========================================================
+# CLEAR CART
+# =========================================================
+
+@router.delete(
+    "/cart/current",
+)
+async def clear_cart(
+    user: User = __import__(
+        "fastapi"
+    ).Depends(
+        get_current_user
+    ),
+):
+
+    async with get_session() as session:
+
+        await ShopRepository.clear_cart(
+            session,
+            user.id,
         )
 
         await session.commit()
