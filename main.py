@@ -1,6 +1,11 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import sys
+from contextlib import asynccontextmanager
+
+import uvicorn
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -8,8 +13,6 @@ from aiogram.enums import ParseMode
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-
-import uvicorn
 
 from config import settings
 
@@ -59,12 +62,45 @@ logger = logging.getLogger("TEYZUS")
 
 
 # =========================================================
-# FASTAPI
+# FASTAPI LIFESPAN
+# =========================================================
+
+@asynccontextmanager
+async def lifespan(
+    fastapi_app: FastAPI,
+):
+    """
+    Жизненный цикл FastAPI.
+
+    При запуске:
+        - база уже инициализируется
+          в main()
+
+    При остановке:
+        - закрываем соединения БД.
+    """
+
+    logger.info(
+        "FastAPI application started."
+    )
+
+    try:
+        yield
+
+    finally:
+        logger.info(
+            "FastAPI application stopping..."
+        )
+
+
+# =========================================================
+# FASTAPI APPLICATION
 # =========================================================
 
 app = FastAPI(
     title="TEYZUS API",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 
@@ -78,6 +114,7 @@ async def root():
         {
             "status": "ok",
             "service": "TEYZUS",
+            "version": "1.0.0",
             "bot": settings.bot_username,
         }
     )
@@ -92,6 +129,22 @@ async def health():
     return JSONResponse(
         {
             "status": "healthy",
+            "service": "TEYZUS",
+        }
+    )
+
+
+# =========================================================
+# API STATUS
+# =========================================================
+
+@app.get("/api/status")
+async def api_status():
+    return JSONResponse(
+        {
+            "status": "ok",
+            "service": "TEYZUS API",
+            "bot": settings.bot_username,
         }
     )
 
@@ -101,6 +154,14 @@ async def health():
 # =========================================================
 
 async def run_bot() -> None:
+    """
+    Запускает Telegram-бота.
+    """
+
+    logger.info(
+        "Creating Telegram Bot..."
+    )
+
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(
@@ -111,56 +172,63 @@ async def run_bot() -> None:
     dispatcher = Dispatcher()
 
     # =====================================================
-    # START
+    # ROUTERS
     # =====================================================
+
+    logger.info(
+        "Registering Telegram routers..."
+    )
+
+    # -----------------------------------------------------
+    # START
+    # -----------------------------------------------------
 
     dispatcher.include_router(
         start_router
     )
 
-    # =====================================================
-    # MENU / HUNTER
-    # =====================================================
+    # -----------------------------------------------------
+    # MAIN MENU / HUNTER
+    # -----------------------------------------------------
 
     dispatcher.include_router(
         menu_router
     )
 
-    # =====================================================
+    # -----------------------------------------------------
     # PROFILE
-    # =====================================================
+    # -----------------------------------------------------
 
     dispatcher.include_router(
         profile_router
     )
 
-    # =====================================================
-    # ADMIN / PROMO
-    # =====================================================
+    # -----------------------------------------------------
+    # OWNER / ADMIN PROMO
+    # -----------------------------------------------------
 
     dispatcher.include_router(
         admin_promo_router
     )
 
     logger.info(
-        "========================================"
+        "Telegram routers registered."
+    )
+
+    # =====================================================
+    # START POLLING
+    # =====================================================
+
+    logger.info(
+        "TEYZUS Bot starting..."
     )
 
     logger.info(
-        "TEYZUS BOT STARTING"
-    )
-
-    logger.info(
-        "Bot: @%s",
+        "Bot username: %s",
         settings.bot_username,
     )
 
-    logger.info(
-        "========================================"
-    )
-
     try:
-
         await dispatcher.start_polling(
             bot,
             allowed_updates=(
@@ -168,45 +236,57 @@ async def run_bot() -> None:
             ),
         )
 
+    except asyncio.CancelledError:
+
+        logger.info(
+            "Telegram polling cancelled."
+        )
+
+        raise
+
     except Exception:
 
         logger.exception(
-            "TEYZUS Bot crashed"
+            "Telegram bot crashed."
         )
 
         raise
 
     finally:
 
-        logger.info(
-            "Closing username hunter..."
-        )
+        # =================================================
+        # CLOSE HUNTER
+        # =================================================
 
         try:
             await hunter.close()
 
+            logger.info(
+                "Hunter closed."
+            )
+
         except Exception:
 
             logger.exception(
-                "Failed to close hunter"
+                "Failed to close hunter."
             )
 
-        logger.info(
-            "Closing Telegram bot session..."
-        )
+        # =================================================
+        # CLOSE BOT SESSION
+        # =================================================
 
         try:
             await bot.session.close()
 
+            logger.info(
+                "Telegram bot session closed."
+            )
+
         except Exception:
 
             logger.exception(
-                "Failed to close bot session"
+                "Failed to close Telegram session."
             )
-
-        logger.info(
-            "TEYZUS Bot stopped."
-        )
 
 
 # =========================================================
@@ -214,17 +294,9 @@ async def run_bot() -> None:
 # =========================================================
 
 async def run_web() -> None:
-
-    configuration = uvicorn.Config(
-        app,
-        host=settings.web_host,
-        port=settings.web_port,
-        log_level=settings.log_level.lower(),
-    )
-
-    server = uvicorn.Server(
-        configuration
-    )
+    """
+    Запускает FastAPI/Uvicorn.
+    """
 
     logger.info(
         "Starting FastAPI server..."
@@ -240,73 +312,36 @@ async def run_web() -> None:
         settings.web_port,
     )
 
-    await server.serve()
-
-
-# =========================================================
-# APPLICATION STARTUP
-# =========================================================
-
-async def startup() -> None:
-
-    logger.info(
-        "========================================"
+    configuration = uvicorn.Config(
+        app,
+        host=settings.web_host,
+        port=settings.web_port,
+        log_level=settings.log_level.lower(),
     )
 
-    logger.info(
-        "TEYZUS INITIALIZATION"
-    )
-
-    logger.info(
-        "Initializing database..."
-    )
-
-    await init_database()
-
-    logger.info(
-        "Database initialized successfully."
-    )
-
-    logger.info(
-        "========================================"
-    )
-
-
-# =========================================================
-# APPLICATION SHUTDOWN
-# =========================================================
-
-async def shutdown() -> None:
-
-    logger.info(
-        "========================================"
-    )
-
-    logger.info(
-        "TEYZUS SHUTDOWN"
-    )
-
-    logger.info(
-        "Closing database..."
+    server = uvicorn.Server(
+        configuration
     )
 
     try:
 
-        await close_database()
+        await server.serve()
+
+    except asyncio.CancelledError:
 
         logger.info(
-            "Database closed successfully."
+            "Web server cancelled."
         )
+
+        raise
 
     except Exception:
 
         logger.exception(
-            "Failed to close database"
+            "FastAPI server crashed."
         )
 
-    logger.info(
-        "========================================"
-    )
+        raise
 
 
 # =========================================================
@@ -314,8 +349,64 @@ async def shutdown() -> None:
 # =========================================================
 
 async def main() -> None:
+    """
+    Главная точка запуска TEYZUS.
 
-    await startup()
+    Запускает одновременно:
+
+        1. PostgreSQL
+           └── SQLAlchemy
+
+        2. Telegram Bot
+           └── Aiogram
+
+        3. FastAPI
+           └── Mini App / API
+    """
+
+    logger.info(
+        "=================================================="
+    )
+
+    logger.info(
+        "TEYZUS STARTING"
+    )
+
+    logger.info(
+        "=================================================="
+    )
+
+    # =====================================================
+    # DATABASE
+    # =====================================================
+
+    logger.info(
+        "Initializing database..."
+    )
+
+    try:
+
+        await init_database()
+
+        logger.info(
+            "Database initialized successfully."
+        )
+
+    except Exception:
+
+        logger.exception(
+            "Database initialization failed."
+        )
+
+        raise
+
+    # =====================================================
+    # START BOT + WEB
+    # =====================================================
+
+    logger.info(
+        "Starting TEYZUS services..."
+    )
 
     try:
 
@@ -327,7 +418,7 @@ async def main() -> None:
     except asyncio.CancelledError:
 
         logger.info(
-            "TEYZUS tasks cancelled."
+            "TEYZUS services cancelled."
         )
 
         raise
@@ -335,14 +426,45 @@ async def main() -> None:
     except Exception:
 
         logger.exception(
-            "TEYZUS application crashed."
+            "One of TEYZUS services crashed."
         )
 
         raise
 
     finally:
 
-        await shutdown()
+        # =================================================
+        # DATABASE CLOSE
+        # =================================================
+
+        logger.info(
+            "Closing database..."
+        )
+
+        try:
+
+            await close_database()
+
+            logger.info(
+                "Database closed."
+            )
+
+        except Exception:
+
+            logger.exception(
+                "Failed to close database."
+            )
+
+        logger.info(
+            "=================================================="
+        )
+
+        logger.info(
+            "TEYZUS STOPPED"
+        )
+
+        logger.info(
+            "==================================================")
 
 
 # =========================================================
@@ -360,13 +482,13 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
 
         logger.info(
-            "TEYZUS stopped by user."
+            "TEYZUS stopped by keyboard interrupt."
         )
 
     except Exception:
 
         logger.exception(
-            "Fatal TEYZUS error."
+            "TEYZUS terminated with an unexpected error."
         )
 
         sys.exit(1)
