@@ -24,6 +24,9 @@ from bot.handlers.profile import (
 from bot.handlers.promo import (
     router as promo_router,
 )
+from bot.handlers.admin_promo import (
+    router as admin_promo_router,
+)
 # =========================================================
 # LOGGING
 # =========================================================
@@ -68,7 +71,7 @@ async def health():
         }
     )
 # =========================================================
-# TELEGRAM BOT
+# BOT
 # =========================================================
 async def run_bot() -> None:
     bot = Bot(
@@ -78,9 +81,9 @@ async def run_bot() -> None:
         ),
     )
     dispatcher = Dispatcher()
-    # =====================================================
-    # ROUTERS
-    # =====================================================
+    # -----------------------------------------------------
+    # USER ROUTERS
+    # -----------------------------------------------------
     dispatcher.include_router(
         start_router
     )
@@ -92,6 +95,12 @@ async def run_bot() -> None:
     )
     dispatcher.include_router(
         promo_router
+    )
+    # -----------------------------------------------------
+    # OWNER ROUTERS
+    # -----------------------------------------------------
+    dispatcher.include_router(
+        admin_promo_router
     )
     logger.info(
         "TEYZUS Bot starting..."
