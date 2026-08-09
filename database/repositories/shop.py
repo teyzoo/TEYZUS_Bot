@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
+    and_,
     delete,
     func,
     or_,
@@ -13,68 +13,92 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import User
 from database.shop_models import (
-    ShopCategory,
     ShopFavorite,
     ShopListing,
     ShopCartItem,
-    ShopPurchase,
-    ShopReview,
+    ShopCategory,
 )
-
-
-# =========================================================
-# TIME
-# =========================================================
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-# =========================================================
-# CATEGORIES
-# =========================================================
-
-async def get_categories(
-    session: AsyncSession,
-) -> list[ShopCategory]:
-
-    result = await session.execute(
-        select(ShopCategory)
-        .where(
-            ShopCategory.is_active.is_(True)
-        )
-        .order_by(
-            ShopCategory.sort_order.asc(),
-            ShopCategory.id.asc(),
-        )
-    )
-
-    return list(result.scalars().all())
-
-
-async def get_category_by_slug(
-    session: AsyncSession,
-    slug: str,
-) -> Optional[ShopCategory]:
-
-    result = await session.execute(
-        select(ShopCategory)
-        .where(
-            ShopCategory.slug == slug,
-            ShopCategory.is_active.is_(True),
-        )
-    )
-
-    return result.scalar_one_or_none()
 
 
 # =========================================================
 # LISTINGS
 # =========================================================
 
-async def get_shop_listings(
+async def get_listing_by_id(
     session: AsyncSession,
-    user_id: int,
+    listing_id: int,
+) -> Optional[ShopListing]:
+
+    result = await session.execute(
+        select(ShopListing).where(
+            ShopListing.id == listing_id
+        )
+    )
+
+    return result.scalar_one_or_none()
+
+
+async def get_listing_by_username(
+    session: AsyncSession,
+    username: str,
+) -> Optional[ShopListing]:
+
+    normalized = username.lower().lstrip("@").strip()
+
+    result = await session.execute(
+        select(ShopListing).where(
+            ShopListing.normalized_username
+            == normalized
+        )
+    )
+
+    return result.scalar_one_or_none()
+
+
+async def create_listing(
+    session: AsyncSession,
+    *,
+    seller: User,
+    username: str,
+    title: Optional[str],
+    description: Optional[str],
+    category_id: Optional[int],
+    price_rub: int,
+    price_stars: Optional[int],
+) -> ShopListing:
+
+    clean_username = (
+        username
+        .strip()
+        .lstrip("@")
+    )
+
+    listing = ShopListing(
+        username=clean_username,
+        normalized_username=clean_username.lower(),
+        seller_id=seller.id,
+        seller_telegram_id=seller.telegram_id,
+        seller_username=seller.username,
+        title=title,
+        description=description,
+        category_id=category_id,
+        price_rub=price_rub,
+        price_stars=price_stars,
+        status="pending",
+        is_active=True,
+    )
+
+    session.add(listing)
+
+    await session.flush()
+
+    return listing
+
+
+async def get_public_listings(
+    session: AsyncSession,
+    *,
+    user_id: Optional[int],
     search: str = "",
     category: str = "all",
     sort: str = "new",
@@ -82,86 +106,58 @@ async def get_shop_listings(
     per_page: int = 20,
 ) -> tuple[list[ShopListing], int]:
 
-    page = max(page, 1)
-    per_page = max(
-        1,
-        min(per_page, 100),
-    )
+    conditions = [
+        ShopListing.is_active.is_(True),
+        ShopListing.status == "approved",
+    ]
 
-    query = (
-        select(ShopListing)
-        .where(
-            ShopListing.status == "approved",
-            ShopListing.is_active.is_(True),
-        )
-    )
-
-    count_query = (
-        select(
-            func.count(
-                ShopListing.id
-            )
-        )
-        .where(
-            ShopListing.status == "approved",
-            ShopListing.is_active.is_(True),
-        )
-    )
-
-    # -----------------------------------------------------
-    # SEARCH
-    # -----------------------------------------------------
+    search = search.strip()
 
     if search:
         search_value = (
-            search.strip()
+            search
             .lstrip("@")
+            .lower()
         )
 
-        pattern = (
-            f"%{search_value}%"
+        conditions.append(
+            ShopListing.normalized_username.ilike(
+                f"%{search_value}%"
+            )
         )
-
-        condition = or_(
-            ShopListing.username.ilike(
-                pattern
-            ),
-            ShopListing.title.ilike(
-                pattern
-            ),
-            ShopListing.description.ilike(
-                pattern
-            ),
-        )
-
-        query = query.where(
-            condition
-        )
-
-        count_query = count_query.where(
-            condition
-        )
-
-    # -----------------------------------------------------
-    # CATEGORY
-    # -----------------------------------------------------
 
     if category == "premium":
-
-        query = query.where(
+        conditions.append(
             ShopListing.is_premium.is_(True)
         )
 
-        count_query = count_query.where(
-            ShopListing.is_premium.is_(True)
-        )
+    # =====================================================
+    # TOTAL
+    # =====================================================
 
-    # -----------------------------------------------------
+    count_query = select(
+        func.count(ShopListing.id)
+    ).where(
+        and_(*conditions)
+    )
+
+    total_result = await session.execute(
+        count_query
+    )
+
+    total = total_result.scalar_one()
+
+    # =====================================================
     # SORT
-    # -----------------------------------------------------
+    # =====================================================
+
+    query = select(
+        ShopListing
+    ).where(
+        and_(*conditions)
+    )
 
     if category == "popular" or sort == "popular":
-
         query = query.order_by(
             ShopListing.views_count.desc(),
             ShopListing.favorites_count.desc(),
@@ -169,33 +165,35 @@ async def get_shop_listings(
         )
 
     elif category == "cheap" or sort == "price_asc":
-
         query = query.order_by(
             ShopListing.price_rub.asc(),
             ShopListing.created_at.desc(),
         )
 
     elif sort == "price_desc":
-
         query = query.order_by(
             ShopListing.price_rub.desc(),
             ShopListing.created_at.desc(),
         )
 
     else:
-
         query = query.order_by(
             ShopListing.created_at.desc()
         )
 
-    # -----------------------------------------------------
+    # =====================================================
     # PAGINATION
-    # -----------------------------------------------------
+    # =====================================================
+
+    page = max(page, 1)
+    per_page = max(
+        1,
+        min(per_page, 100),
+    )
 
     offset = (
-        (page - 1)
-        * per_page
-    )
+        page - 1
+    ) * per_page
 
     query = query.offset(
         offset
@@ -211,74 +209,48 @@ async def get_shop_listings(
         result.scalars().all()
     )
 
-    total_result = await session.execute(
-        count_query
-    )
+    # =====================================================
+    # FAVORITES
+    # =====================================================
 
-    total = int(
-        total_result.scalar() or 0
-    )
+    if user_id and listings:
+
+        listing_ids = [
+            item.id
+            for item in listings
+        ]
+
+        favorite_result = await session.execute(
+            select(
+                ShopFavorite.listing_id
+            ).where(
+                ShopFavorite.user_id
+                == user_id,
+                ShopFavorite.listing_id.in_(
+                    listing_ids
+                ),
+            )
+        )
+
+        favorite_ids = set(
+            favorite_result.scalars().all()
+        )
+
+        for listing in listings:
+            listing._is_favorite = (
+                listing.id in favorite_ids
+            )
+
+    else:
+
+        for listing in listings:
+            listing._is_favorite = False
 
     return listings, total
 
 
 # =========================================================
-# LISTING BY ID
-# =========================================================
-
-async def get_listing(
-    session: AsyncSession,
-    listing_id: int,
-) -> Optional[ShopListing]:
-
-    result = await session.execute(
-        select(ShopListing)
-        .where(
-            ShopListing.id == listing_id
-        )
-    )
-
-    return result.scalar_one_or_none()
-
-
-# =========================================================
-# LISTING BY USERNAME
-# =========================================================
-
-async def get_listing_by_username(
-    session: AsyncSession,
-    username: str,
-) -> Optional[ShopListing]:
-
-    username = (
-        username
-        .strip()
-        .lstrip("@")
-        .lower()
-    )
-
-    result = await session.execute(
-        select(ShopListing)
-        .where(
-            func.lower(
-                ShopListing.username
-            ) == username,
-            ShopListing.status.in_(
-                [
-                    "pending",
-                    "approved",
-                    "reserved",
-                ]
-            ),
-        )
-        .limit(1)
-    )
-
-    return result.scalar_one_or_none()
-
-
-# =========================================================
-# FAVORITE
+# FAVORITES
 # =========================================================
 
 async def is_favorite(
@@ -288,12 +260,12 @@ async def is_favorite(
 ) -> bool:
 
     result = await session.execute(
-        select(ShopFavorite.id)
-        .where(
-            ShopFavorite.user_id == user_id,
-            ShopFavorite.listing_id == listing_id,
+        select(ShopFavorite.id).where(
+            ShopFavorite.user_id
+            == user_id,
+            ShopFavorite.listing_id
+            == listing_id,
         )
-        .limit(1)
     )
 
     return result.scalar_one_or_none() is not None
@@ -321,21 +293,13 @@ async def add_favorite(
 
     session.add(favorite)
 
-    await session.execute(
-        __import__(
-            "sqlalchemy"
-        ).update(ShopListing)
-        .where(
-            ShopListing.id == listing_id
-        )
-        .values(
-            favorites_count=(
-                ShopListing.favorites_count + 1
-            )
-        )
+    listing = await get_listing_by_id(
+        session,
+        listing_id,
     )
 
-    await session.commit()
+    if listing:
+        listing.favorites_count += 1
 
     return True
 
@@ -346,39 +310,34 @@ async def remove_favorite(
     listing_id: int,
 ) -> bool:
 
-    exists = await is_favorite(
+    result = await session.execute(
+        select(ShopFavorite).where(
+            ShopFavorite.user_id
+            == user_id,
+            ShopFavorite.listing_id
+            == listing_id,
+        )
+    )
+
+    favorite = result.scalar_one_or_none()
+
+    if not favorite:
+        return False
+
+    await session.delete(
+        favorite
+    )
+
+    listing = await get_listing_by_id(
         session,
-        user_id,
         listing_id,
     )
 
-    if not exists:
-        return False
-
-    await session.execute(
-        delete(ShopFavorite)
-        .where(
-            ShopFavorite.user_id == user_id,
-            ShopFavorite.listing_id == listing_id,
+    if listing:
+        listing.favorites_count = max(
+            0,
+            listing.favorites_count - 1,
         )
-    )
-
-    await session.execute(
-        __import__(
-            "sqlalchemy"
-        ).update(ShopListing)
-        .where(
-            ShopListing.id == listing_id,
-            ShopListing.favorites_count > 0,
-        )
-        .values(
-            favorites_count=(
-                ShopListing.favorites_count - 1
-            )
-        )
-    )
-
-    await session.commit()
 
     return True
 
@@ -386,6 +345,59 @@ async def remove_favorite(
 # =========================================================
 # CART
 # =========================================================
+
+async def add_to_cart(
+    session: AsyncSession,
+    user_id: int,
+    listing_id: int,
+) -> bool:
+
+    result = await session.execute(
+        select(ShopCartItem).where(
+            ShopCartItem.user_id
+            == user_id,
+            ShopCartItem.listing_id
+            == listing_id,
+        )
+    )
+
+    if result.scalar_one_or_none():
+        return False
+
+    session.add(
+        ShopCartItem(
+            user_id=user_id,
+            listing_id=listing_id,
+        )
+    )
+
+    return True
+
+
+async def remove_from_cart(
+    session: AsyncSession,
+    user_id: int,
+    listing_id: int,
+) -> bool:
+
+    result = await session.execute(
+        select(ShopCartItem).where(
+            ShopCartItem.user_id
+            == user_id,
+            ShopCartItem.listing_id
+            == listing_id,
+        )
+    )
+
+    item = result.scalar_one_or_none()
+
+    if not item:
+        return False
+
+    await session.delete(item)
+
+    return True
+
 
 async def get_cart(
     session: AsyncSession,
@@ -400,8 +412,8 @@ async def get_cart(
             == ShopListing.id,
         )
         .where(
-            ShopCartItem.user_id == user_id,
-            ShopListing.status == "approved",
+            ShopCartItem.user_id
+            == user_id,
             ShopListing.is_active.is_(True),
         )
         .order_by(
@@ -414,84 +426,25 @@ async def get_cart(
     )
 
 
-async def add_to_cart(
-    session: AsyncSession,
-    user_id: int,
-    listing_id: int,
-) -> bool:
-
-    listing = await get_listing(
-        session,
-        listing_id,
-    )
-
-    if (
-        listing is None
-        or listing.status != "approved"
-        or not listing.is_active
-    ):
-        return False
-
-    if listing.seller_id == user_id:
-        return False
-
-    existing = await session.execute(
-        select(ShopCartItem.id)
-        .where(
-            ShopCartItem.user_id == user_id,
-            ShopCartItem.listing_id == listing_id,
-        )
-        .limit(1)
-    )
-
-    if existing.scalar_one_or_none():
-        return False
-
-    session.add(
-        ShopCartItem(
-            user_id=user_id,
-            listing_id=listing_id,
-        )
-    )
-
-    await session.commit()
-
-    return True
-
-
-async def remove_from_cart(
-    session: AsyncSession,
-    user_id: int,
-    listing_id: int,
-) -> bool:
-
-    result = await session.execute(
-        delete(ShopCartItem)
-        .where(
-            ShopCartItem.user_id == user_id,
-            ShopCartItem.listing_id == listing_id,
-        )
-    )
-
-    await session.commit()
-
-    return result.rowcount > 0
-
-
 # =========================================================
-# USER
+# CATEGORIES
 # =========================================================
 
-async def get_user_by_id(
+async def get_categories(
     session: AsyncSession,
-    user_id: int,
-) -> Optional[User]:
+) -> list[ShopCategory]:
 
     result = await session.execute(
-        select(User)
+        select(ShopCategory)
         .where(
-            User.id == user_id
+            ShopCategory.is_active.is_(True)
+        )
+        .order_by(
+            ShopCategory.sort_order.asc(),
+            ShopCategory.id.asc(),
         )
     )
 
-    return result.scalar_one_or_none()
+    return list(
+        result.scalars().all()
+    )
