@@ -1,53 +1,76 @@
+from __future__ import annotations
+
 from aiogram import Router, F
 from aiogram.types import (
-    Message,
     CallbackQuery,
+    Message,
 )
 from aiogram.utils.keyboard import (
     InlineKeyboardBuilder,
 )
-from sqlalchemy import select
 
-from database.models import (
-    Task,
-    User,
+from database.session import get_session
+from database.models import User
+
+from database.repositories.tasks import (
+    get_active_tasks,
+    get_user_task_completion_count,
 )
-from database.session import (
-    get_session,
-)
-from bot.services.tasks import (
-    task_is_active,
-    user_can_see_task,
+
+from services.tasks import (
     complete_task,
+    is_premium_active,
 )
 
-router = Router()
+
+router = Router(
+    name="tasks"
+)
 
 
 # =========================================================
-# TASK LIST
+# TASK TYPE NAMES
 # =========================================================
 
-def task_keyboard(
-    tasks: list[Task],
-):
+TASK_TYPE_NAMES = {
+    "subscribe_channel": "📢 Подписка",
+    "referral": "👥 Рефералы",
+    "search": "🔎 Поиск",
+    "promo": "🎟 Промокод",
+    "premium": "💎 Premium",
+    "open_miniapp": "📱 Mini App",
+    "custom": "⭐ Другое",
+}
+
+
+# =========================================================
+# REWARD NAMES
+# =========================================================
+
+REWARD_NAMES = {
+    "stars": "⭐ Stars",
+    "rub": "💰 Баланс",
+    "balance": "💰 Баланс",
+    "searches": "🔎 Поиски",
+    "bonus_searches": "🔎 Поиски",
+    "traps": "🎯 Ловушки",
+    "bonus_traps": "🎯 Ловушки",
+    "discount": "🏷 Скидка",
+    "premium": "💎 Premium",
+}
+
+
+# =========================================================
+# MAIN TASKS BUTTON
+# =========================================================
+
+def tasks_button():
     builder = InlineKeyboardBuilder()
 
-    for task in tasks:
-
-        if task.only_premium:
-            prefix = "💎"
-        else:
-            prefix = "🎯"
-
-        builder.button(
-            text=(
-                f"{prefix} {task.title}"
-            ),
-            callback_data=(
-                f"task:{task.id}"
-            ),
-        )
+    builder.button(
+        text="📋 Задания",
+        callback_data="tasks:list",
+    )
 
     builder.adjust(1)
 
@@ -55,320 +78,498 @@ def task_keyboard(
 
 
 # =========================================================
-# TASKS BUTTON
+# PERIOD
+# =========================================================
+
+def get_period_text(
+    task,
+) -> str:
+
+    if not task.starts_at or not task.expires_at:
+        return "♾ Постоянное"
+
+    seconds = (
+        task.expires_at
+        - task.starts_at
+    ).total_seconds()
+
+    if seconds <= 86400:
+        return "📅 Ежедневное"
+
+    if seconds <= 86400 * 7:
+        return "📆 Недельное"
+
+    if seconds <= 86400 * 31:
+        return "🗓 Месячное"
+
+    return "⏳ Ограниченное"
+
+
+# =========================================================
+# REWARD
+# =========================================================
+
+def get_reward_text(
+    task,
+) -> str:
+
+    reward = task.reward_type.lower()
+
+    name = REWARD_NAMES.get(
+        reward,
+        "🎁 Награда",
+    )
+
+    if reward == "premium":
+        amount = (
+            task.premium_days
+            or task.reward_amount
+        )
+
+        return (
+            f"{name}: "
+            f"{amount} дн."
+        )
+
+    return (
+        f"{name}: "
+        f"+{task.reward_amount}"
+    )
+
+
+# =========================================================
+# TASK CARD
+# =========================================================
+
+def task_text(
+    task,
+    completed: int,
+) -> str:
+
+    type_name = TASK_TYPE_NAMES.get(
+        task.task_type,
+        "⭐ Задание",
+    )
+
+    period = get_period_text(
+        task
+    )
+
+    reward = get_reward_text(
+        task
+    )
+
+    premium_text = ""
+
+    if task.only_premium:
+        premium_text = (
+            "\n💎 <b>Только Premium</b>"
+        )
+
+    description = (
+        task.description
+        or "Выполни это задание."
+    )
+
+    limit_text = ""
+
+    if task.max_completions_per_user:
+        limit_text = (
+            "\n🔢 Лимит: "
+            f"{task.max_completions_per_user}"
+        )
+
+    return (
+        f"{task.image_file_id or ''}\n"
+        f"<b>{task.title}</b>\n\n"
+        f"{description}\n\n"
+        f"{type_name}\n"
+        f"{period}\n"
+        f"🎁 {reward}"
+        f"{premium_text}"
+        f"{limit_text}\n\n"
+        f"Выполнено тобой: "
+        f"{completed}"
+    )
+
+
+# =========================================================
+# TASK LIST
 # =========================================================
 
 @router.callback_query(
-    F.data == "tasks"
+    F.data == "tasks:list"
 )
-async def open_tasks(
+async def tasks_list(
     callback: CallbackQuery,
 ):
-
-    async with get_session() as session:
-
-        user = (
-            await session.scalar(
-                select(User).where(
-                    User.telegram_id
-                    == callback.from_user.id
-                )
-            )
-        )
-
-        if not user:
-            await callback.answer(
-                "Пользователь не найден.",
-                show_alert=True,
-            )
-            return
-
-        result = await session.execute(
-            select(Task)
-            .where(
-                Task.is_active.is_(True)
-            )
-            .order_by(
-                Task.sort_order.asc(),
-                Task.id.asc(),
-            )
-        )
-
-        all_tasks = result.scalars().all()
-
-        tasks = []
-
-        for task in all_tasks:
-
-            if not task_is_active(task):
-                continue
-
-            if not user_can_see_task(
-                user,
-                task,
-            ):
-                continue
-
-            tasks.append(task)
-
-    if not tasks:
-
-        await callback.message.edit_text(
-            "🎯 <b>Задания</b>\n\n"
-            "Сейчас доступных заданий нет.",
-        )
-
-        await callback.answer()
-        return
-
-    text = (
-        "🎯 <b>Задания</b>\n\n"
-        "Выбери задание:"
-    )
-
-    await callback.message.edit_text(
-        text,
-        reply_markup=task_keyboard(
-            tasks
-        ),
-    )
 
     await callback.answer()
 
-
-# =========================================================
-# TASK DETAILS
-# =========================================================
-
-@router.callback_query(
-    F.data.startswith("task:")
-)
-async def task_details(
-    callback: CallbackQuery,
-):
-
-    task_id = int(
-        callback.data.split(":")[1]
+    user_tg_id = (
+        callback.from_user.id
     )
 
     async with get_session() as session:
 
+        from sqlalchemy import select
+
+        result = await session.execute(
+            select(User).where(
+                User.telegram_id
+                == user_tg_id
+            )
+        )
+
         user = (
-            await session.scalar(
-                select(User).where(
-                    User.telegram_id
-                    == callback.from_user.id
-                )
-            )
+            result.scalar_one_or_none()
         )
 
-        task = await session.scalar(
-            select(Task).where(
-                Task.id == task_id
+        if user is None:
+            await callback.message.answer(
+                "❌ Сначала используй /start."
             )
+            return
+
+        premium = is_premium_active(
+            user
         )
 
-        if not user or not task:
+        tasks = await get_active_tasks(
+            session,
+            premium=premium,
+        )
 
-            await callback.answer(
-                "Задание не найдено.",
-                show_alert=True,
+        if not tasks:
+            await callback.message.answer(
+                "📋 <b>Задания</b>\n\n"
+                "Сейчас доступных заданий нет.\n\n"
+                "Загляни позже 👀"
             )
             return
 
-        if not task_is_active(task):
-
-            await callback.answer(
-                "Задание недоступно.",
-                show_alert=True,
-            )
-            return
-
-        if not user_can_see_task(
-            user,
-            task,
-        ):
-
-            await callback.answer(
-                "Задание доступно только Premium.",
-                show_alert=True,
-            )
-            return
-
-        reward = ""
-
-        if task.reward_type == "premium":
-
-            reward = (
-                f"💎 Premium "
-                f"{task.premium_days} дн."
-            )
-
-        elif task.reward_type == "balance":
-
-            reward = (
-                f"💰 "
-                f"{task.reward_amount:,} ₽"
-                .replace(",", " ")
-            )
-
-        elif task.reward_type == "stars":
-
-            reward = (
-                f"⭐ "
-                f"{task.reward_amount} Stars"
-            )
-
-        elif task.reward_type == "searches":
-
-            reward = (
-                f"🔎 "
-                f"{task.reward_amount} поисков"
-            )
-
-        elif task.reward_type == "traps":
-
-            reward = (
-                f"🎯 "
-                f"{task.reward_amount} ловушек"
-            )
-
-        elif task.reward_type == "discount":
-
-            reward = (
-                f"🏷 "
-                f"+{task.reward_amount}%"
-            )
-
-        else:
-
-            reward = "🎁 Награда"
-
-        period_names = {
-            "daily": "Ежедневное",
-            "weekly": "Еженедельное",
-            "monthly": "Ежемесячное",
-            "permanent": "Постоянное",
-        }
-
-        period = period_names.get(
-            task.period,
-            "Задание",
+        builder = (
+            InlineKeyboardBuilder()
         )
 
         text = (
-            f"🎯 <b>{task.title}</b>\n\n"
-            f"{task.description or ''}\n\n"
-            f"📅 Тип: {period}\n"
-            f"🎁 Награда: {reward}\n"
+            "📋 <b>ЗАДАНИЯ TEYZUS</b>\n\n"
         )
 
-        if task.repeatable:
-            text += (
-                "\n🔄 Можно выполнять повторно."
+        for task in tasks:
+
+            completed = (
+                await get_user_task_completion_count(
+                    session,
+                    user_id=user.id,
+                    task_id=task.id,
+                )
             )
 
-        builder = InlineKeyboardBuilder()
+            text += (
+                f"{task.title}\n"
+                f"🎁 {get_reward_text(task)}\n"
+            )
+
+            if task.only_premium:
+                text += "💎 Premium\n"
+
+            if completed:
+                text += (
+                    f"✅ Выполнено: "
+                    f"{completed}\n"
+                )
+
+            text += "\n"
+
+            builder.button(
+                text=(
+                    "💎 "
+                    if task.only_premium
+                    else "📋 "
+                )
+                + task.title[:35],
+                callback_data=(
+                    f"tasks:view:{task.id}"
+                ),
+            )
 
         builder.button(
-            text="✅ Выполнить",
+            text="🔄 Обновить",
+            callback_data="tasks:list",
+        )
+
+        builder.adjust(1)
+
+        await callback.message.answer(
+            text,
+            reply_markup=builder.as_markup(),
+        )
+
+
+# =========================================================
+# VIEW TASK
+# =========================================================
+
+@router.callback_query(
+    F.data.startswith("tasks:view:")
+)
+async def tasks_view(
+    callback: CallbackQuery,
+):
+
+    await callback.answer()
+
+    try:
+        task_id = int(
+            callback.data.split(":")[-1]
+        )
+    except (
+        ValueError,
+        AttributeError,
+    ):
+        return
+
+    async with get_session() as session:
+
+        from sqlalchemy import select
+
+        result = await session.execute(
+            select(User).where(
+                User.telegram_id
+                == callback.from_user.id
+            )
+        )
+
+        user = (
+            result.scalar_one_or_none()
+        )
+
+        if user is None:
+            await callback.message.answer(
+                "❌ Пользователь не найден."
+            )
+            return
+
+        from database.repositories.tasks import (
+            get_task,
+        )
+
+        task = await get_task(
+            session,
+            task_id,
+        )
+
+        if task is None:
+            await callback.message.answer(
+                "❌ Задание не найдено."
+            )
+            return
+
+        completed = (
+            await get_user_task_completion_count(
+                session,
+                user_id=user.id,
+                task_id=task.id,
+            )
+        )
+
+        builder = (
+            InlineKeyboardBuilder()
+        )
+
+        # -------------------------------------------------
+        # ACTION
+        # -------------------------------------------------
+
+        if task.task_type == "subscribe_channel":
+            button_text = (
+                "📢 Подписаться"
+            )
+
+        elif task.task_type == "open_miniapp":
+            button_text = (
+                "📱 Открыть Mini App"
+            )
+
+        elif task.task_type == "search":
+            button_text = (
+                "🔎 Выполнить поиск"
+            )
+
+        elif task.task_type == "referral":
+            button_text = (
+                "👥 Пригласить"
+            )
+
+        elif task.task_type == "promo":
+            button_text = (
+                "🎟 Активировать"
+            )
+
+        else:
+            button_text = (
+                "✅ Выполнить"
+            )
+
+        builder.button(
+            text=button_text,
             callback_data=(
-                f"task_complete:{task.id}"
+                f"tasks:do:{task.id}"
             ),
         )
 
         builder.button(
             text="⬅️ Назад",
-            callback_data="tasks",
+            callback_data="tasks:list",
         )
 
         builder.adjust(1)
 
-    await callback.message.edit_text(
-        text,
-        reply_markup=builder.as_markup(),
-    )
-
-    await callback.answer()
+        await callback.message.answer(
+            task_text(
+                task,
+                completed,
+            ),
+            reply_markup=(
+                builder.as_markup()
+            ),
+        )
 
 
 # =========================================================
-# COMPLETE
+# DO TASK
 # =========================================================
 
 @router.callback_query(
-    F.data.startswith("task_complete:")
+    F.data.startswith("tasks:do:")
 )
-async def complete_task_handler(
+async def tasks_do(
     callback: CallbackQuery,
 ):
 
-    task_id = int(
-        callback.data.split(":")[1]
-    )
+    await callback.answer()
+
+    try:
+        task_id = int(
+            callback.data.split(":")[-1]
+        )
+    except (
+        ValueError,
+        AttributeError,
+    ):
+        return
 
     async with get_session() as session:
 
+        from sqlalchemy import select
+
+        result = await session.execute(
+            select(User).where(
+                User.telegram_id
+                == callback.from_user.id
+            )
+        )
+
         user = (
-            await session.scalar(
-                select(User).where(
-                    User.telegram_id
-                    == callback.from_user.id
-                )
-            )
+            result.scalar_one_or_none()
         )
 
-        task = await session.scalar(
-            select(Task).where(
-                Task.id == task_id
-            )
-        )
-
-        if not user or not task:
-
-            await callback.answer(
-                "Задание не найдено.",
-                show_alert=True,
+        if user is None:
+            await callback.message.answer(
+                "❌ Пользователь не найден."
             )
             return
 
-        # Пока базовое выполнение.
-        #
-        # Для subscribe_channel,
-        # search, referral и других
-        # типов ниже подключим
-        # отдельные проверки.
+        from database.repositories.tasks import (
+            get_task,
+        )
+
+        task = await get_task(
+            session,
+            task_id,
+        )
+
+        if task is None:
+            await callback.message.answer(
+                "❌ Задание не найдено."
+            )
+            return
+
+        # -------------------------------------------------
+        # SEARCH
+        # -------------------------------------------------
 
         if task.task_type == "search":
 
-            await callback.answer(
-                "Для этого задания сначала нужно выполнить поиск.",
-                show_alert=True,
+            await callback.message.answer(
+                "🔎 <b>Задание на поиск</b>\n\n"
+                "Выполни поиск username через "
+                "кнопку «Поиск».\n\n"
+                "После успешного поиска задание "
+                "можно будет подтвердить."
             )
+
             return
 
-        success, message = (
-            await complete_task(
-                session=session,
-                user=user,
-                task=task,
+        # -------------------------------------------------
+        # SUBSCRIBE
+        # -------------------------------------------------
+
+        if task.task_type == "subscribe_channel":
+
+            await callback.message.answer(
+                "📢 Сначала подпишись на канал:\n\n"
+                f"{task.target_value or 'Канал не указан'}\n\n"
+                "После подписки нажми кнопку "
+                "проверки ещё раз."
             )
+
+            return
+
+        # -------------------------------------------------
+        # REFERRAL
+        # -------------------------------------------------
+
+        if task.task_type == "referral":
+
+            await callback.message.answer(
+                "👥 Для выполнения задания "
+                "пригласи нужное количество "
+                "пользователей по своей "
+                "реферальной ссылке."
+            )
+
+            return
+
+        # -------------------------------------------------
+        # MINI APP
+        # -------------------------------------------------
+
+        if task.task_type == "open_miniapp":
+
+            result = await complete_task(
+                session,
+                task_id=task.id,
+                user=user,
+            )
+
+            await callback.message.answer(
+                result.message
+            )
+
+            return
+
+        # -------------------------------------------------
+        # CUSTOM
+        # -------------------------------------------------
+
+        result = await complete_task(
+            session,
+            task_id=task.id,
+            user=user,
         )
 
-    if not success:
-
-        await callback.answer(
-            message,
-            show_alert=True,
+        await callback.message.answer(
+            result.message
         )
-        return
-
-    await callback.message.edit_text(
-        "🎉 <b>Задание выполнено!</b>\n\n"
-        f"🎁 Твоя награда:\n"
-        f"<b>{message}</b>",
-    )
-
-    await callback.answer(
-        "Награда выдана!",
-    )
