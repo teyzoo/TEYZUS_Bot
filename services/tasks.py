@@ -1,20 +1,22 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
-from database.models import Task, User
+from database.models import (
+    User,
+    Task,
+    TaskCompletion,
+)
 
 from database.repositories.tasks import (
-    create_completion,
-    get_last_completion,
     get_task,
+    get_active_tasks,
     get_user_task_completion_count,
-    global_limit_reached,
-    increment_task_completions,
-    user_limit_reached,
+    create_task_completion,
 )
 
 
@@ -27,10 +29,11 @@ def utc_now() -> datetime:
 
 
 # =========================================================
-# RESULT
+# TASK RESULT
 # =========================================================
 
 class TaskResult:
+
     def __init__(
         self,
         success: bool,
@@ -47,7 +50,7 @@ class TaskResult:
 
 
 # =========================================================
-# PREMIUM
+# PREMIUM ACTIVE
 # =========================================================
 
 def is_premium_active(
@@ -57,20 +60,164 @@ def is_premium_active(
     if not user.premium_active:
         return False
 
-    if not user.premium_until:
+    if user.premium_until is None:
         return True
 
+    now = utc_now()
+
+    if user.premium_until <= now:
+        return False
+
+    return True
+
+
+# =========================================================
+# TASK PERIOD
+# =========================================================
+
+def get_period(
+    task: Task,
+) -> str:
+
+    target = (
+        task.target_value or ""
+    ).lower()
+
+    if target.startswith(
+        "daily:"
+    ):
+        return "daily"
+
+    if target.startswith(
+        "weekly:"
+    ):
+        return "weekly"
+
+    if target.startswith(
+        "monthly:"
+    ):
+        return "monthly"
+
+    return "permanent"
+
+
+# =========================================================
+# TASK ACCESS
+# =========================================================
+
+def can_user_see_task(
+    user: User,
+    task: Task,
+) -> bool:
+
+    if not task.is_active:
+        return False
+
+    now = utc_now()
+
+    if (
+        task.starts_at is not None
+        and task.starts_at > now
+    ):
+        return False
+
+    if (
+        task.expires_at is not None
+        and task.expires_at < now
+    ):
+        return False
+
+    if task.only_premium:
+        if not is_premium_active(
+            user
+        ):
+            return False
+
+    if task.only_new_users:
+        # Условие "нового пользователя"
+        # можно изменить позже.
+        age = (
+            now - user.created_at
+        )
+
+        if age > timedelta(
+            days=7
+        ):
+            return False
+
+    if (
+        task.max_completions
+        is not None
+    ):
+        if (
+            task.completions_count
+            >= task.max_completions
+        ):
+            return False
+
+    return True
+
+
+# =========================================================
+# CAN COMPLETE
+# =========================================================
+
+async def can_complete_task(
+    session: AsyncSession,
+    user: User,
+    task: Task,
+) -> tuple[bool, str]:
+
+    if not can_user_see_task(
+        user,
+        task,
+    ):
+        return (
+            False,
+            "Это задание сейчас недоступно.",
+        )
+
+    count = (
+        await get_user_task_completion_count(
+            session,
+            task.id,
+            user.id,
+        )
+    )
+
+    if not task.repeatable:
+
+        if count > 0:
+            return (
+                False,
+                "Ты уже выполнял это задание.",
+            )
+
+    if (
+        task.max_completions_per_user
+        is not None
+    ):
+
+        if (
+            count
+            >= task.max_completions_per_user
+        ):
+            return (
+                False,
+                "Лимит выполнения этого задания исчерпан.",
+            )
+
     return (
-        user.premium_until
-        > utc_now()
+        True,
+        "OK",
     )
 
 
 # =========================================================
-# PREMIUM REWARD
+# APPLY PREMIUM
 # =========================================================
 
-def add_premium(
+def apply_premium_reward(
     user: User,
     days: int,
 ) -> None:
@@ -81,201 +228,101 @@ def add_premium(
     now = utc_now()
 
     if (
-        user.premium_active
-        and user.premium_until
+        user.premium_until is not None
         and user.premium_until > now
+        and user.premium_active
     ):
-        start = user.premium_until
+        base = user.premium_until
     else:
-        start = now
+        base = now
+
+    user.premium_until = (
+        base + timedelta(
+            days=days
+        )
+    )
 
     user.premium_active = True
 
-    user.premium_until = (
-        start
-        + timedelta(days=days)
-    )
-
 
 # =========================================================
-# REWARD
+# APPLY REWARD
 # =========================================================
 
 def apply_reward(
     user: User,
     reward_type: str,
-    amount: int,
+    reward_amount: int,
     premium_days: int,
 ) -> None:
 
-    reward = reward_type.lower().strip()
+    reward_type = (
+        reward_type
+        .strip()
+        .lower()
+    )
 
-    # -----------------------------------------------------
-    # STARS
-    # -----------------------------------------------------
-
-    if reward in {
+    if reward_type in (
         "stars",
         "star",
         "telegram_stars",
-    }:
-        user.stars_balance += max(
-            0,
-            amount,
+    ):
+        user.stars_balance += (
+            reward_amount
         )
-        return
 
-    # -----------------------------------------------------
-    # RUB
-    # -----------------------------------------------------
-
-    if reward in {
-        "rub",
+    elif reward_type in (
         "balance",
+        "rub",
+        "rubles",
         "balance_rub",
-        "money",
-    }:
-        user.balance_rub += max(
-            0,
-            amount,
+    ):
+        user.balance_rub += (
+            reward_amount
         )
-        return
 
-    # -----------------------------------------------------
-    # SEARCHES
-    # -----------------------------------------------------
-
-    if reward in {
+    elif reward_type in (
         "search",
         "searches",
         "bonus_searches",
-    }:
-        user.bonus_searches += max(
-            0,
-            amount,
+    ):
+        user.bonus_searches += (
+            reward_amount
         )
-        return
 
-    # -----------------------------------------------------
-    # TRAPS
-    # -----------------------------------------------------
-
-    if reward in {
+    elif reward_type in (
         "trap",
         "traps",
         "bonus_traps",
-    }:
-        user.bonus_traps += max(
-            0,
-            amount,
+    ):
+        user.bonus_traps += (
+            reward_amount
         )
-        return
 
-    # -----------------------------------------------------
-    # DISCOUNT
-    # -----------------------------------------------------
-
-    if reward in {
+    elif reward_type in (
         "discount",
         "discount_percent",
-    }:
-        user.discount_percent = min(
-            100,
-            max(
-                0,
-                user.discount_percent
-                + amount,
-            ),
+    ):
+        new_discount = (
+            user.discount_percent
+            + reward_amount
         )
-        return
 
-    # -----------------------------------------------------
-    # PREMIUM
-    # -----------------------------------------------------
+        user.discount_percent = min(
+            new_discount,
+            100,
+        )
 
-    if reward in {
+    elif reward_type in (
         "premium",
         "premium_days",
-    }:
-        add_premium(
+    ):
+        apply_premium_reward(
             user,
-            premium_days or amount,
+            premium_days
+            if premium_days > 0
+            else reward_amount,
         )
-        return
-
-
-# =========================================================
-# CHECK TASK ACCESS
-# =========================================================
-
-def check_task_access(
-    task: Task,
-    user: User,
-) -> TaskResult:
-
-    now = utc_now()
-
-    # -----------------------------------------------------
-    # ACTIVE
-    # -----------------------------------------------------
-
-    if not task.is_active:
-        return TaskResult(
-            False,
-            "❌ Это задание отключено.",
-        )
-
-    # -----------------------------------------------------
-    # START
-    # -----------------------------------------------------
-
-    if (
-        task.starts_at
-        and task.starts_at > now
-    ):
-        return TaskResult(
-            False,
-            "⏳ Это задание ещё не началось.",
-        )
-
-    # -----------------------------------------------------
-    # EXPIRE
-    # -----------------------------------------------------
-
-    if (
-        task.expires_at
-        and task.expires_at < now
-    ):
-        return TaskResult(
-            False,
-            "⌛ Срок выполнения задания истёк.",
-        )
-
-    # -----------------------------------------------------
-    # PREMIUM ONLY
-    # -----------------------------------------------------
-
-    if task.only_premium:
-        if not is_premium_active(user):
-            return TaskResult(
-                False,
-                "💎 Это задание доступно только пользователям TEYZUS Premium.",
-            )
-
-    # -----------------------------------------------------
-    # GLOBAL LIMIT
-    # -----------------------------------------------------
-
-    if global_limit_reached(task):
-        return TaskResult(
-            False,
-            "🚫 Лимит выполнений этого задания уже достигнут.",
-        )
-
-    return TaskResult(
-        True,
-        "OK",
-    )
 
 
 # =========================================================
@@ -284,14 +331,9 @@ def check_task_access(
 
 async def complete_task(
     session: AsyncSession,
-    *,
-    task_id: int,
     user: User,
+    task_id: int,
 ) -> TaskResult:
-
-    # -----------------------------------------------------
-    # TASK
-    # -----------------------------------------------------
 
     task = await get_task(
         session,
@@ -301,98 +343,75 @@ async def complete_task(
     if task is None:
         return TaskResult(
             False,
-            "❌ Задание не найдено.",
+            "Задание не найдено.",
         )
 
-    # -----------------------------------------------------
-    # ACCESS
-    # -----------------------------------------------------
-
-    access = check_task_access(
-        task,
-        user,
-    )
-
-    if not access.success:
-        return access
-
-    # -----------------------------------------------------
-    # USER LIMIT
-    # -----------------------------------------------------
-
-    completion_count = (
-        await get_user_task_completion_count(
+    allowed, message = (
+        await can_complete_task(
             session,
-            user_id=user.id,
-            task_id=task.id,
+            user,
+            task,
         )
     )
 
-    if (
-        not task.repeatable
-        and completion_count > 0
-    ):
+    if not allowed:
         return TaskResult(
             False,
-            "✅ Ты уже выполнил это задание.",
+            message,
         )
 
-    if user_limit_reached(
-        task,
-        completion_count,
-    ):
-        return TaskResult(
-            False,
-            "🚫 Ты достиг личного лимита выполнения этого задания.",
-        )
+    # =====================================================
+    # REWARD
+    # =====================================================
 
-    # -----------------------------------------------------
-    # CREATE COMPLETION
-    # -----------------------------------------------------
+    apply_reward(
+        user=user,
+        reward_type=task.reward_type,
+        reward_amount=task.reward_amount,
+        premium_days=task.premium_days,
+    )
 
-    completion = await create_completion(
-        session,
+    # =====================================================
+    # COMPLETION
+    # =====================================================
+
+    await create_task_completion(
+        session=session,
         task=task,
         user_id=user.id,
         telegram_id=user.telegram_id,
     )
 
-    # -----------------------------------------------------
-    # REWARD
-    # -----------------------------------------------------
+    # =====================================================
+    # AUTO DISABLE
+    # =====================================================
 
-    apply_reward(
-        user,
-        task.reward_type,
-        task.reward_amount,
-        task.premium_days,
-    )
-
-    # -----------------------------------------------------
-    # COUNTER
-    # -----------------------------------------------------
-
-    await increment_task_completions(
-        session,
-        task,
-    )
+    if (
+        task.max_completions
+        is not None
+        and task.completions_count
+        >= task.max_completions
+    ):
+        task.is_active = False
 
     await session.commit()
 
-    # -----------------------------------------------------
+    # =====================================================
     # MESSAGE
-    # -----------------------------------------------------
+    # =====================================================
 
-    reward_text = format_reward(
-        task.reward_type,
-        task.reward_amount,
-        task.premium_days,
+    reward_text = (
+        format_reward(
+            task.reward_type,
+            task.reward_amount,
+            task.premium_days,
+        )
     )
 
     return TaskResult(
-        True,
-        (
-            "🎉 <b>Задание выполнено!</b>\n\n"
+        success=True,
+        message=(
+            "🎉 Задание выполнено!\n\n"
             f"🎁 Награда: {reward_text}"
         ),
         reward_type=task.reward_type,
@@ -411,51 +430,141 @@ def format_reward(
     premium_days: int,
 ) -> str:
 
-    reward = reward_type.lower().strip()
+    reward_type = (
+        reward_type
+        .strip()
+        .lower()
+    )
 
-    if reward in {
+    if reward_type in (
         "stars",
         "star",
         "telegram_stars",
-    }:
-        return f"⭐ +{amount} Stars"
-
-    if reward in {
-        "rub",
-        "balance",
-        "balance_rub",
-        "money",
-    }:
-        return f"💰 +{amount:,} ₽".replace(
-            ",",
-            " ",
+    ):
+        return (
+            f"⭐ {amount} Stars"
         )
 
-    if reward in {
+    if reward_type in (
+        "balance",
+        "rub",
+        "rubles",
+        "balance_rub",
+    ):
+        return (
+            f"💰 {amount:,} ₽"
+            .replace(",", " ")
+        )
+
+    if reward_type in (
         "search",
         "searches",
         "bonus_searches",
-    }:
-        return f"🔎 +{amount} поисков"
+    ):
+        return (
+            f"🔎 +{amount} поисков"
+        )
 
-    if reward in {
+    if reward_type in (
         "trap",
         "traps",
         "bonus_traps",
-    }:
-        return f"🎯 +{amount} ловушек"
+    ):
+        return (
+            f"🎯 +{amount} ловушек"
+        )
 
-    if reward in {
+    if reward_type in (
         "discount",
         "discount_percent",
-    }:
-        return f"🏷️ +{amount}% скидки"
+    ):
+        return (
+            f"🏷️ -{amount}% скидки"
+        )
 
-    if reward in {
+    if reward_type in (
         "premium",
         "premium_days",
-    }:
-        days = premium_days or amount
-        return f"💎 Premium на {days} дн."
+    ):
+        days = (
+            premium_days
+            if premium_days > 0
+            else amount
+        )
 
-    return f"🎁 {amount}"
+        return (
+            f"💎 Premium на {days} дн."
+        )
+
+    return (
+        f"🎁 {amount}"
+    )
+
+
+# =========================================================
+# USER TASKS
+# =========================================================
+
+async def get_user_tasks(
+    session: AsyncSession,
+    user: User,
+) -> list[dict]:
+
+    tasks = await get_active_tasks(
+        session
+    )
+
+    result: list[dict] = []
+
+    for task in tasks:
+
+        if not can_user_see_task(
+            user,
+            task,
+        ):
+            continue
+
+        count = (
+            await get_user_task_completion_count(
+                session,
+                task.id,
+                user.id,
+            )
+        )
+
+        completed = (
+            count > 0
+            and not task.repeatable
+        )
+
+        if (
+            task.max_completions_per_user
+            is not None
+            and count
+            >= task.max_completions_per_user
+        ):
+            completed = True
+
+        result.append(
+            {
+                "id": task.id,
+                "title": task.title,
+                "description": task.description,
+                "task_type": task.task_type,
+                "target_value": task.target_value,
+                "reward_type": task.reward_type,
+                "reward_amount": task.reward_amount,
+                "premium_days": task.premium_days,
+                "period": get_period(task),
+                "repeatable": task.repeatable,
+                "completed": completed,
+                "completions": count,
+                "max_completions_per_user": (
+                    task.max_completions_per_user
+                ),
+                "only_premium": task.only_premium,
+                "image_file_id": task.image_file_id,
+            }
+        )
+
+    return result
