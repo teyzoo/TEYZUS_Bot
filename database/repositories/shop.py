@@ -2,26 +2,17 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import (
+    ShopCartItem,
     ShopFavorite,
     ShopListing,
 )
 
 
 class ShopRepository:
-    """
-    Репозиторий TEYZUS SHOP.
-
-    Здесь находится работа с:
-    - объявлениями;
-    - поиском;
-    - категориями;
-    - сортировкой;
-    - избранным.
-    """
 
     # =====================================================
     # LISTINGS
@@ -36,37 +27,59 @@ class ShopRepository:
         sort: str = "new",
         page: int = 1,
         per_page: int = 20,
-        user_id: Optional[int] = None,
-    ) -> tuple[list[ShopListing], int]:
+    ) -> tuple[
+        list[ShopListing],
+        int,
+    ]:
 
-        page = max(page, 1)
-        per_page = min(max(per_page, 1), 100)
+        page = max(
+            page,
+            1,
+        )
 
-        query = select(ShopListing).where(
+        per_page = min(
+            max(
+                per_page,
+                1,
+            ),
+            100,
+        )
+
+        query = select(
+            ShopListing
+        ).where(
             ShopListing.is_active.is_(True),
             ShopListing.is_moderated.is_(True),
+            ShopListing.status == "active",
         )
 
         # -------------------------------------------------
         # SEARCH
         # -------------------------------------------------
 
-        search = search.strip().lstrip("@")
+        search = (
+            search
+            .strip()
+            .lstrip("@")
+        )
 
         if search:
-            pattern = f"%{search}%"
+
+            pattern = (
+                f"%{search}%"
+            )
 
             query = query.where(
-                or_(
-                    ShopListing.username.ilike(
-                        pattern
-                    ),
-                    ShopListing.title.ilike(
-                        pattern
-                    ),
-                    ShopListing.description.ilike(
-                        pattern
-                    ),
+                ShopListing.username.ilike(
+                    pattern
+                )
+                |
+                ShopListing.title.ilike(
+                    pattern
+                )
+                |
+                ShopListing.description.ilike(
+                    pattern
                 )
             )
 
@@ -75,6 +88,7 @@ class ShopRepository:
         # -------------------------------------------------
 
         if category == "premium":
+
             query = query.where(
                 ShopListing.is_premium.is_(True)
             )
@@ -84,27 +98,45 @@ class ShopRepository:
         # -------------------------------------------------
 
         if category == "cheap":
+
             query = query.order_by(
                 ShopListing.price_rub.asc()
             )
 
-        elif category == "popular" or sort == "popular":
+        elif category == "popular":
+
             query = query.order_by(
                 ShopListing.views.desc(),
                 ShopListing.created_at.desc(),
             )
 
+        elif category == "new":
+
+            query = query.order_by(
+                ShopListing.created_at.desc()
+            )
+
         elif sort == "price_asc":
+
             query = query.order_by(
                 ShopListing.price_rub.asc()
             )
 
         elif sort == "price_desc":
+
             query = query.order_by(
                 ShopListing.price_rub.desc()
             )
 
+        elif sort == "popular":
+
+            query = query.order_by(
+                ShopListing.views.desc(),
+                ShopListing.created_at.desc(),
+            )
+
         else:
+
             query = query.order_by(
                 ShopListing.created_at.desc()
             )
@@ -116,22 +148,26 @@ class ShopRepository:
         count_query = select(
             func.count()
         ).select_from(
-            query.subquery()
+            query.order_by(None).subquery()
         )
 
-        count_result = await session.execute(
-            count_query
+        count_result = (
+            await session.execute(
+                count_query
+            )
         )
 
-        total = count_result.scalar_one()
+        total = (
+            count_result.scalar_one()
+        )
 
         # -------------------------------------------------
         # PAGINATION
         # -------------------------------------------------
 
         offset = (
-            (page - 1) * per_page
-        )
+            page - 1
+        ) * per_page
 
         query = query.offset(
             offset
@@ -147,29 +183,67 @@ class ShopRepository:
             result.scalars().all()
         )
 
-        return listings, total
+        return (
+            listings,
+            total,
+        )
 
     # =====================================================
-    # SINGLE LISTING
+    # GET LISTING
     # =====================================================
 
     @staticmethod
     async def get_listing(
         session: AsyncSession,
         listing_id: int,
-    ) -> Optional[ShopListing]:
+    ) -> Optional[
+        ShopListing
+    ]:
 
         result = await session.execute(
-            select(ShopListing).where(
-                ShopListing.id == listing_id,
-                ShopListing.is_active.is_(True),
+            select(
+                ShopListing
+            ).where(
+                ShopListing.id
+                == listing_id
             )
         )
 
-        return result.scalar_one_or_none()
+        return (
+            result.scalar_one_or_none()
+        )
 
     # =====================================================
-    # CREATE
+    # ACTIVE LISTING
+    # =====================================================
+
+    @staticmethod
+    async def get_active_listing(
+        session: AsyncSession,
+        listing_id: int,
+    ) -> Optional[
+        ShopListing
+    ]:
+
+        result = await session.execute(
+            select(
+                ShopListing
+            ).where(
+                ShopListing.id
+                == listing_id,
+                ShopListing.is_active.is_(True),
+                ShopListing.is_moderated.is_(True),
+                ShopListing.status
+                == "active",
+            )
+        )
+
+        return (
+            result.scalar_one_or_none()
+        )
+
+    # =====================================================
+    # CREATE LISTING
     # =====================================================
 
     @staticmethod
@@ -188,26 +262,39 @@ class ShopRepository:
 
         listing = ShopListing(
             seller_id=seller_id,
-            username=username.lstrip("@"),
-            title=title,
-            description=description,
+            username=(
+                username
+                .strip()
+                .lstrip("@")
+            ),
+            title=title.strip(),
+            description=(
+                description.strip()
+                if description
+                else None
+            ),
             price_rub=price_rub,
             price_stars=price_stars,
             category=category,
             is_premium=is_premium,
+            is_verified=False,
             is_active=False,
             is_moderated=False,
+            status="pending",
             views=0,
+            favorites_count=0,
         )
 
-        session.add(listing)
+        session.add(
+            listing
+        )
 
         await session.flush()
 
         return listing
 
     # =====================================================
-    # INCREMENT VIEWS
+    # VIEWS
     # =====================================================
 
     @staticmethod
@@ -216,9 +303,11 @@ class ShopRepository:
         listing_id: int,
     ) -> None:
 
-        listing = await ShopRepository.get_listing(
-            session,
-            listing_id,
+        listing = (
+            await ShopRepository.get_listing(
+                session,
+                listing_id,
+            )
         )
 
         if listing is None:
@@ -229,7 +318,7 @@ class ShopRepository:
         await session.flush()
 
     # =====================================================
-    # FAVORITES
+    # FAVORITE CHECK
     # =====================================================
 
     @staticmethod
@@ -241,13 +330,24 @@ class ShopRepository:
     ) -> bool:
 
         result = await session.execute(
-            select(ShopFavorite.id).where(
-                ShopFavorite.user_id == user_id,
-                ShopFavorite.listing_id == listing_id,
+            select(
+                ShopFavorite.id
+            ).where(
+                ShopFavorite.user_id
+                == user_id,
+                ShopFavorite.listing_id
+                == listing_id,
             )
         )
 
-        return result.scalar_one_or_none() is not None
+        return (
+            result.scalar_one_or_none()
+            is not None
+        )
+
+    # =====================================================
+    # ADD FAVORITE
+    # =====================================================
 
     @staticmethod
     async def add_favorite(
@@ -257,10 +357,12 @@ class ShopRepository:
         listing_id: int,
     ) -> bool:
 
-        exists = await ShopRepository.is_favorite(
-            session,
-            user_id=user_id,
-            listing_id=listing_id,
+        exists = (
+            await ShopRepository.is_favorite(
+                session,
+                user_id=user_id,
+                listing_id=listing_id,
+            )
         )
 
         if exists:
@@ -271,11 +373,27 @@ class ShopRepository:
             listing_id=listing_id,
         )
 
-        session.add(favorite)
+        session.add(
+            favorite
+        )
+
+        listing = (
+            await ShopRepository.get_listing(
+                session,
+                listing_id,
+            )
+        )
+
+        if listing:
+            listing.favorites_count += 1
 
         await session.flush()
 
         return True
+
+    # =====================================================
+    # REMOVE FAVORITE
+    # =====================================================
 
     @staticmethod
     async def remove_favorite(
@@ -286,9 +404,13 @@ class ShopRepository:
     ) -> bool:
 
         result = await session.execute(
-            select(ShopFavorite).where(
-                ShopFavorite.user_id == user_id,
-                ShopFavorite.listing_id == listing_id,
+            select(
+                ShopFavorite
+            ).where(
+                ShopFavorite.user_id
+                == user_id,
+                ShopFavorite.listing_id
+                == listing_id,
             )
         )
 
@@ -303,6 +425,153 @@ class ShopRepository:
             favorite
         )
 
+        listing = (
+            await ShopRepository.get_listing(
+                session,
+                listing_id,
+            )
+        )
+
+        if listing:
+            listing.favorites_count = max(
+                0,
+                listing.favorites_count - 1,
+            )
+
         await session.flush()
 
         return True
+
+    # =====================================================
+    # CART
+    # =====================================================
+
+    @staticmethod
+    async def get_cart(
+        session: AsyncSession,
+        user_id: int,
+    ) -> list[
+        ShopCartItem
+    ]:
+
+        result = await session.execute(
+            select(
+                ShopCartItem
+            ).where(
+                ShopCartItem.user_id
+                == user_id
+            ).order_by(
+                ShopCartItem.created_at.desc()
+            )
+        )
+
+        return list(
+            result.scalars().all()
+        )
+
+    @staticmethod
+    async def cart_contains(
+        session: AsyncSession,
+        *,
+        user_id: int,
+        listing_id: int,
+    ) -> bool:
+
+        result = await session.execute(
+            select(
+                ShopCartItem.id
+            ).where(
+                ShopCartItem.user_id
+                == user_id,
+                ShopCartItem.listing_id
+                == listing_id,
+            )
+        )
+
+        return (
+            result.scalar_one_or_none()
+            is not None
+        )
+
+    @staticmethod
+    async def add_to_cart(
+        session: AsyncSession,
+        *,
+        user_id: int,
+        listing_id: int,
+    ) -> bool:
+
+        exists = (
+            await ShopRepository.cart_contains(
+                session,
+                user_id=user_id,
+                listing_id=listing_id,
+            )
+        )
+
+        if exists:
+            return False
+
+        item = ShopCartItem(
+            user_id=user_id,
+            listing_id=listing_id,
+        )
+
+        session.add(
+            item
+        )
+
+        await session.flush()
+
+        return True
+
+    @staticmethod
+    async def remove_from_cart(
+        session: AsyncSession,
+        *,
+        user_id: int,
+        listing_id: int,
+    ) -> bool:
+
+        result = await session.execute(
+            select(
+                ShopCartItem
+            ).where(
+                ShopCartItem.user_id
+                == user_id,
+                ShopCartItem.listing_id
+                == listing_id,
+            )
+        )
+
+        item = (
+            result.scalar_one_or_none()
+        )
+
+        if item is None:
+            return False
+
+        await session.delete(
+            item
+        )
+
+        await session.flush()
+
+        return True
+
+    @staticmethod
+    async def clear_cart(
+        session: AsyncSession,
+        user_id: int,
+    ) -> None:
+
+        await session.execute(
+            delete(
+                ShopCartItem
+            ).where(
+                ShopCartItem.user_id
+                == user_id
+            )
+        )
+
+        await session.flush()
