@@ -1,15 +1,19 @@
-from aiogram.fsm.state import State, StatesGroup
-
-
-class SearchState(StatesGroup):
-    choosing_type = State()
-    choosing_filters = State()
-    searching = State()
-
-
+from aiogram.fsm.state import (
+    State,
+    StatesGroup,
+)
+# =========================================================
+# COMMON / HUNTER SEARCH
+# =========================================================
+class HunterSearchState(StatesGroup):
+    length_6 = State()
+    length_5 = State()
+    expensive = State()
+    dictionary = State()
+class HunterMaskState(StatesGroup):
+    mask = State()
+# =========================================================
+# PROMO
+# =========================================================
 class PromoState(StatesGroup):
-    waiting_code = State()
-
-
-class SupportState(StatesGroup):
-    waiting_message = State()
+    code = State()
