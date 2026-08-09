@@ -1,47 +1,74 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
+
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from database.models import (
     PromoActivation,
     PromoCode,
     User,
 )
+
 from database.repositories import (
     activate_promo,
     get_promo_by_code,
 )
+
+
 # =========================================================
-# PROMO RESULT
+# RESULT
 # =========================================================
+
 @dataclass(frozen=True)
 class PromoResult:
+
     success: bool
+
     message: str
+
     activation: PromoActivation | None = None
+
     reward_type: str | None = None
+
     reward_amount: int = 0
+
     premium_days: int = 0
+
+
 # =========================================================
 # TIME
 # =========================================================
+
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+
+    return datetime.now(
+        timezone.utc
+    )
+
+
 # =========================================================
-# PROMO SERVICE
+# SERVICE
 # =========================================================
+
 class PromoService:
+
     # =====================================================
     # ACTIVATE
     # =====================================================
+
     async def activate(
         self,
         session: AsyncSession,
         user: User,
         code: str,
     ) -> PromoResult:
+
         code = code.strip().upper()
+
         if not code:
+
             return PromoResult(
                 success=False,
                 message=(
@@ -49,14 +76,18 @@ class PromoService:
                     "Введите промокод ещё раз."
                 ),
             )
-        # =================================================
-        # FIND PROMO
-        # =================================================
+
+        # -------------------------------------------------
+        # FIND
+        # -------------------------------------------------
+
         promo = await get_promo_by_code(
             session=session,
             code=code,
         )
+
         if promo is None:
+
             return PromoResult(
                 success=False,
                 message=(
@@ -65,261 +96,348 @@ class PromoService:
                     "и попробуй ещё раз."
                 ),
             )
-        # =================================================
-        # PRE-CHECK
-        # =================================================
+
+        # -------------------------------------------------
+        # VALIDATE
+        # -------------------------------------------------
+
         error = self.validate_promo(
             promo=promo,
             user=user,
         )
+
         if error is not None:
+
             return PromoResult(
                 success=False,
                 message=error,
             )
-        # =================================================
+
+        # -------------------------------------------------
         # ACTIVATE
-        # =================================================
+        # -------------------------------------------------
+
         try:
+
             activation = await activate_promo(
                 session=session,
                 promo=promo,
                 user=user,
             )
+
         except ValueError as error:
+
             return PromoResult(
                 success=False,
-                message=f"❌ <b>{error}</b>",
+                message=(
+                    f"❌ <b>{error}</b>"
+                ),
             )
-        # =================================================
-        # SUCCESS MESSAGE
-        # =================================================
-        message = self.build_success_message(
-            promo=promo,
-            activation=activation,
-        )
+
+        # -------------------------------------------------
+        # SUCCESS
+        # -------------------------------------------------
+
         return PromoResult(
             success=True,
-            message=message,
+            message=self.build_success_message(
+                promo=promo,
+                activation=activation,
+            ),
             activation=activation,
             reward_type=promo.reward_type,
             reward_amount=promo.reward_amount,
             premium_days=promo.premium_days,
         )
+
     # =====================================================
     # VALIDATE
     # =====================================================
+
     def validate_promo(
         self,
         promo: PromoCode,
         user: User,
     ) -> str | None:
+
         now = utc_now()
-        # =================================================
+
+        # -------------------------------------------------
         # ACTIVE
-        # =================================================
+        # -------------------------------------------------
+
         if not promo.is_active:
+
             return (
                 "❌ <b>Промокод отключён.</b>"
             )
-        # =================================================
+
+        # -------------------------------------------------
         # START
-        # =================================================
+        # -------------------------------------------------
+
         if promo.starts_at is not None:
+
             starts_at = promo.starts_at
+
             if starts_at.tzinfo is None:
+
                 starts_at = starts_at.replace(
                     tzinfo=timezone.utc
                 )
+
             if now < starts_at:
+
                 return (
                     "⏳ <b>Промокод ещё не активен.</b>\n\n"
                     "Попробуй использовать его позже."
                 )
-        # =================================================
+
+        # -------------------------------------------------
         # EXPIRES
-        # =================================================
+        # -------------------------------------------------
+
         if promo.expires_at is not None:
+
             expires_at = promo.expires_at
+
             if expires_at.tzinfo is None:
+
                 expires_at = expires_at.replace(
                     tzinfo=timezone.utc
                 )
+
             if now > expires_at:
+
                 return (
                     "⌛ <b>Срок действия промокода истёк.</b>"
                 )
-        # =================================================
+
+        # -------------------------------------------------
         # GLOBAL LIMIT
-        # =================================================
+        # -------------------------------------------------
+
         if promo.max_activations is not None:
+
             if (
                 promo.activations_count
                 >= promo.max_activations
             ):
+
                 return (
-                    "🚫 <b>Лимит активаций исчерпан.</b>\n\n"
-                    "Этот промокод больше нельзя использовать."
+                    "🚫 <b>Лимит активаций исчерпан.</b>"
                 )
-        # =================================================
-        # PREMIUM ONLY
-        # =================================================
+
+        # -------------------------------------------------
+        # PREMIUM
+        # -------------------------------------------------
+
         if promo.only_premium:
+
             if not self.user_has_active_premium(
                 user
             ):
+
                 return (
                     "💎 <b>Промокод только для Premium.</b>\n\n"
-                    "Активируй TEYZUS Premium, "
-                    "чтобы использовать этот код."
+                    "Активируй TEYZUS Premium."
                 )
-        # =================================================
+
+        # -------------------------------------------------
         # NEW USERS
-        # =================================================
+        # -------------------------------------------------
+
         if promo.only_new_users:
-            # Фактическая проверка повторного использования
-            # дополнительно выполняется в repository.
-            #
-            # Здесь проверяем только наличие даты регистрации.
+
             if user.created_at is None:
+
                 return (
-                    "❌ Не удалось определить дату регистрации."
+                    "❌ Не удалось определить "
+                    "дату регистрации."
                 )
-        # =================================================
-        # USER IDS
-        # =================================================
+
+        # -------------------------------------------------
+        # ALLOWED USERS
+        # -------------------------------------------------
+
         if promo.allowed_user_ids:
+
             allowed_ids = self.parse_user_ids(
                 promo.allowed_user_ids
             )
+
             if user.telegram_id not in allowed_ids:
+
                 return (
                     "🔒 <b>Этот промокод недоступен тебе.</b>"
                 )
-        # =================================================
+
+        # -------------------------------------------------
         # REWARD
-        # =================================================
+        # -------------------------------------------------
+
         if promo.reward_type == "premium":
+
             if promo.premium_days <= 0:
+
                 return (
                     "❌ Промокод настроен некорректно."
                 )
+
         elif promo.reward_type in {
             "stars",
             "balance_rub",
             "searches",
             "traps",
         }:
+
             if promo.reward_amount <= 0:
+
                 return (
                     "❌ Промокод настроен некорректно."
                 )
+
         else:
+
             return (
-                "❌ Неизвестный тип награды промокода."
+                "❌ Неизвестный тип награды."
             )
+
         return None
+
     # =====================================================
     # PREMIUM CHECK
     # =====================================================
+
     @staticmethod
     def user_has_active_premium(
         user: User,
     ) -> bool:
+
         if not user.premium_active:
+
             return False
+
         if user.premium_until is None:
+
             return True
-        premium_until = user.premium_until
+
+        premium_until = (
+            user.premium_until
+        )
+
         if premium_until.tzinfo is None:
-            premium_until = premium_until.replace(
-                tzinfo=timezone.utc
+
+            premium_until = (
+                premium_until.replace(
+                    tzinfo=timezone.utc
+                )
             )
+
         return premium_until > utc_now()
+
     # =====================================================
-    # USER IDS
+    # IDS
     # =====================================================
+
     @staticmethod
     def parse_user_ids(
         value: str,
     ) -> set[int]:
+
         result: set[int] = set()
+
         for item in value.split(","):
+
             item = item.strip()
+
             if not item:
                 continue
+
             try:
+
                 result.add(
                     int(item)
                 )
+
             except ValueError:
+
                 continue
+
         return result
+
     # =====================================================
     # SUCCESS MESSAGE
     # =====================================================
+
     @staticmethod
     def build_success_message(
         promo: PromoCode,
         activation: PromoActivation,
     ) -> str:
+
         reward_type = promo.reward_type
-        # =================================================
-        # PREMIUM
-        # =================================================
+
         if reward_type == "premium":
+
             return (
                 "🎉 <b>Промокод активирован!</b>\n\n"
                 f"🎟 Код: <code>{promo.code}</code>\n"
-                f"💎 Награда: <b>TEYZUS Premium</b>\n"
-                f"⏳ Срок: <b>{promo.premium_days} дн.</b>\n\n"
-                "✨ Premium успешно добавлен "
+                "💎 Награда: "
+                "<b>TEYZUS Premium</b>\n"
+                f"⏳ Срок: "
+                f"<b>{promo.premium_days} дн.</b>\n\n"
+                "✨ Premium добавлен "
                 "на твой аккаунт."
             )
-        # =================================================
-        # STARS
-        # =================================================
+
         if reward_type == "stars":
+
             return (
                 "🎉 <b>Промокод активирован!</b>\n\n"
                 f"🎟 Код: <code>{promo.code}</code>\n"
-                f"⭐ Награда: <b>+{promo.reward_amount} Stars</b>\n\n"
+                f"⭐ Награда: "
+                f"<b>+{promo.reward_amount} Stars</b>\n\n"
                 "Баланс Stars пополнен."
             )
-        # =================================================
-        # RUB
-        # =================================================
+
         if reward_type == "balance_rub":
+
             return (
                 "🎉 <b>Промокод активирован!</b>\n\n"
                 f"🎟 Код: <code>{promo.code}</code>\n"
-                f"💰 Награда: <b>+{promo.reward_amount} ₽</b>\n\n"
-                "Баланс успешно пополнен."
+                f"💰 Награда: "
+                f"<b>+{promo.reward_amount} ₽</b>\n\n"
+                "Баланс пополнен."
             )
-        # =================================================
-        # SEARCHES
-        # =================================================
+
         if reward_type == "searches":
+
             return (
                 "🎉 <b>Промокод активирован!</b>\n\n"
                 f"🎟 Код: <code>{promo.code}</code>\n"
-                f"🔎 Награда: <b>+{promo.reward_amount} поисков</b>\n\n"
+                f"🔎 Награда: "
+                f"<b>+{promo.reward_amount} поисков</b>\n\n"
                 "Дополнительные поиски добавлены."
             )
-        # =================================================
-        # TRAPS
-        # =================================================
+
         if reward_type == "traps":
+
             return (
                 "🎉 <b>Промокод активирован!</b>\n\n"
                 f"🎟 Код: <code>{promo.code}</code>\n"
-                f"🚨 Награда: <b>+{promo.reward_amount} ловушек</b>\n\n"
-                "Дополнительные ловушки добавлены."
+                f"🚨 Награда: "
+                f"<b>+{promo.reward_amount} ловушек</b>\n\n"
+                "Ловушки добавлены."
             )
+
         return (
             "🎉 <b>Промокод успешно активирован!</b>"
         )
+
+
 # =========================================================
 # SINGLETON
 # =========================================================
+
 promo_service = PromoService()
