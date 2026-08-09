@@ -2,14 +2,26 @@ import asyncio
 import logging
 import sys
 
-from aiogram import Bot, Dispatcher
+from aiogram import (
+    Bot,
+    Dispatcher,
+)
+
 from aiogram.client.default import (
     DefaultBotProperties,
 )
-from aiogram.enums import ParseMode
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from aiogram.enums import (
+    ParseMode,
+)
+
+from fastapi import (
+    FastAPI,
+)
+
+from fastapi.responses import (
+    JSONResponse,
+)
 
 import uvicorn
 
@@ -36,8 +48,12 @@ from bot.handlers.admin_promo import (
     router as admin_promo_router,
 )
 
-from bot.shop_api import (
-    router as shop_router,
+from bot.handlers.cases import (
+    router as cases_router,
+)
+
+from bot.handlers.admin_cases import (
+    router as admin_cases_router,
 )
 
 
@@ -75,21 +91,9 @@ app = FastAPI(
 )
 
 
-# =========================================================
-# API ROUTERS
-# =========================================================
-
-app.include_router(
-    shop_router
-)
-
-
-# =========================================================
-# ROOT
-# =========================================================
-
 @app.get("/")
 async def root():
+
     return JSONResponse(
         {
             "status": "ok",
@@ -99,29 +103,12 @@ async def root():
     )
 
 
-# =========================================================
-# HEALTH
-# =========================================================
-
 @app.get("/health")
 async def health():
+
     return JSONResponse(
         {
             "status": "healthy",
-        }
-    )
-
-
-# =========================================================
-# SHOP HEALTH
-# =========================================================
-
-@app.get("/api/miniapp/shop/health")
-async def shop_health():
-    return JSONResponse(
-        {
-            "status": "ok",
-            "service": "TEYZUS SHOP",
         }
     )
 
@@ -141,9 +128,9 @@ async def run_bot() -> None:
 
     dispatcher = Dispatcher()
 
-    # -----------------------------------------------------
-    # MAIN ROUTERS
-    # -----------------------------------------------------
+    # =====================================================
+    # MAIN
+    # =====================================================
 
     dispatcher.include_router(
         start_router
@@ -157,12 +144,24 @@ async def run_bot() -> None:
         profile_router
     )
 
-    # -----------------------------------------------------
-    # OWNER PROMO
-    # -----------------------------------------------------
+    # =====================================================
+    # CASES
+    # =====================================================
+
+    dispatcher.include_router(
+        cases_router
+    )
+
+    # =====================================================
+    # OWNER
+    # =====================================================
 
     dispatcher.include_router(
         admin_promo_router
+    )
+
+    dispatcher.include_router(
+        admin_cases_router
     )
 
     logger.info(
@@ -174,7 +173,8 @@ async def run_bot() -> None:
         await dispatcher.start_polling(
             bot,
             allowed_updates=(
-                dispatcher.resolve_used_update_types()
+                dispatcher
+                .resolve_used_update_types()
             ),
         )
 
