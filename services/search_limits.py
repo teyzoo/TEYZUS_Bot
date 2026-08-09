@@ -1,66 +1,167 @@
 from __future__ import annotations
+
 from datetime import datetime, timezone
+
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from database.models import User
-FREE_DAILY_LIMIT = 5
-def reset_daily_counter_if_needed(
+from services.premium import is_premium
+
+
+# =========================================================
+# CONSTANTS
+# =========================================================
+
+FREE_DAILY_SEARCH_LIMIT = 5
+
+
+# =========================================================
+# TIME
+# =========================================================
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def today_key() -> str:
+    return utc_now().strftime("%Y-%m-%d")
+
+
+# =========================================================
+# RESET DAILY COUNTER
+# =========================================================
+
+async def reset_search_counter_if_needed(
+    session: AsyncSession,
     user: User,
-) -> bool:
-    today = datetime.now(
-        timezone.utc
-    ).strftime("%Y-%m-%d")
+) -> None:
+
+    today = today_key()
+
     if user.search_counter_date != today:
+
         user.search_counter_date = today
         user.successful_searches_today = 0
-        return True
-    return False
-def searches_left(
-    user: User,
-) -> int | None:
-    reset_daily_counter_if_needed(user)
-    if user.premium_active:
-        return None
-    return max(
-        0,
-        FREE_DAILY_LIMIT
-        - user.successful_searches_today,
-    )
-def can_search(
+
+        await session.commit()
+
+
+# =========================================================
+# PREMIUM
+# =========================================================
+
+def has_unlimited_searches(
     user: User,
 ) -> bool:
-    remaining = searches_left(user)
+
+    return is_premium(user)
+
+
+# =========================================================
+# REMAINING SEARCHES
+# =========================================================
+
+async def get_remaining_searches(
+    session: AsyncSession,
+    user: User,
+) -> int | None:
+
+    await reset_search_counter_if_needed(
+        session=session,
+        user=user,
+    )
+
+    if has_unlimited_searches(user):
+        return None
+
+    remaining = (
+        FREE_DAILY_SEARCH_LIMIT
+        - user.successful_searches_today
+    )
+
+    return max(
+        remaining,
+        0,
+    )
+
+
+# =========================================================
+# CAN SEARCH
+# =========================================================
+
+async def can_search(
+    session: AsyncSession,
+    user: User,
+) -> bool:
+
+    remaining = await get_remaining_searches(
+        session=session,
+        user=user,
+    )
+
     if remaining is None:
         return True
+
     return remaining > 0
-def limit_text(
-    user: User,
-) -> str:
-    remaining = searches_left(user)
-    if remaining is None:
-        return "💎 Premium: ♾️"
-    return (
-        f"🔎 Осталось сегодня: "
-        f"<b>{remaining}/{FREE_DAILY_LIMIT}</b>"
-    )
+
+
+# =========================================================
+# REGISTER SUCCESSFUL SEARCH
+# =========================================================
+
 async def register_successful_search(
     session: AsyncSession,
     user: User,
-    found_count: int,
-) -> None:
-    if found_count <= 0:
-        return
-    if user.premium_active:
-        return
-    reset_daily_counter_if_needed(user)
-    remaining = max(
-        0,
-        FREE_DAILY_LIMIT
-        - user.successful_searches_today,
+) -> bool:
+
+    await reset_search_counter_if_needed(
+        session=session,
+        user=user,
     )
-    counted = min(
-        found_count,
-        remaining,
-    )
-    user.successful_searches_today += counted
+
+    # Premium не расходует дневной лимит.
+    if has_unlimited_searches(user):
+        return True
+
+    if (
+        user.successful_searches_today
+        >= FREE_DAILY_SEARCH_LIMIT
+    ):
+        return False
+
+    user.successful_searches_today += 1
+
     await session.commit()
-    await session.refresh(user)
+
+    return True
+
+
+# =========================================================
+# SEARCH STATUS TEXT
+# =========================================================
+
+async def search_limit_text(
+    session: AsyncSession,
+    user: User,
+) -> str:
+
+    remaining = await get_remaining_searches(
+        session=session,
+        user=user,
+    )
+
+    if remaining is None:
+        return "💎 <b>Premium:</b> ♾️ безлимитный поиск"
+
+    if remaining <= 0:
+        return (
+            "🔎 <b>Поиски:</b> 0/5\n\n"
+            "❌ Дневной лимит исчерпан.\n"
+            "💎 Оформи Premium для безлимитного поиска."
+        )
+
+    return (
+        f"🔎 <b>Поиски сегодня:</b> "
+        f"{remaining}/"
+        f"{FREE_DAILY_SEARCH_LIMIT}"
+    )
