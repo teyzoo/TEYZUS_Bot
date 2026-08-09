@@ -1,7 +1,13 @@
 from database.repositories.tasks import (
-    TaskRepository,
+    get_active_tasks,
+    get_task_by_id,
+    get_user_task_completions,
+    create_task_completion,
 )
 
 __all__ = [
-    "TaskRepository",
+    "get_active_tasks",
+    "get_task_by_id",
+    "get_user_task_completions",
+    "create_task_completion",
 ]
