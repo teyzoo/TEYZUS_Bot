@@ -1559,3 +1559,248 @@ class ShopReview(Base):
         default=utc_now,
         nullable=False,
     )
+
+# =========================================================
+# TEYZUS SHOP — LISTINGS
+# =========================================================
+
+class ShopListing(Base):
+    __tablename__ = "shop_listings"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    # =====================================================
+    # SELLER
+    # =====================================================
+
+    seller_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "users.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    # =====================================================
+    # USERNAME
+    # =====================================================
+
+    username: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
+    )
+
+    # Название объявления.
+    # Например:
+    # "Красивый короткий username"
+
+    title: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    # Описание от продавца.
+
+    description: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    # =====================================================
+    # PRICE
+    # =====================================================
+
+    price_rub: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        index=True,
+    )
+
+    price_stars: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    # =====================================================
+    # CATEGORY
+    # =====================================================
+
+    category: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
+
+    # =====================================================
+    # FLAGS
+    # =====================================================
+
+    is_premium: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True,
+    )
+
+    is_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    # =====================================================
+    # MODERATION
+    # =====================================================
+
+    # Объявление опубликовано.
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True,
+    )
+
+    # Объявление прошло модерацию.
+
+    is_moderated: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True,
+    )
+
+    # =====================================================
+    # STATISTICS
+    # =====================================================
+
+    views: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    favorites_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    # =====================================================
+    # STATUS
+    # =====================================================
+
+    # Возможные значения:
+    #
+    # pending
+    # active
+    # reserved
+    # sold
+    # rejected
+    # deleted
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default="pending",
+        nullable=False,
+        index=True,
+    )
+
+    # =====================================================
+    # MODERATION
+    # =====================================================
+
+    moderation_comment: Mapped[
+        Optional[str]
+    ] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    moderated_by: Mapped[
+        Optional[int]
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    moderated_at: Mapped[
+        Optional[datetime]
+    ] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    # =====================================================
+    # DATES
+    # =====================================================
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+        index=True,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
+# =========================================================
+# TEYZUS SHOP — FAVORITES
+# =========================================================
+
+class ShopFavorite(Base):
+    __tablename__ = "shop_favorites"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    # =====================================================
+    # USER
+    # =====================================================
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "users.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    # =====================================================
+    # LISTING
+    # =====================================================
+
+    listing_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "shop_listings.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    # =====================================================
+    # DATE
+    # =====================================================
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
