@@ -1,212 +1,378 @@
-import math
-import re
+from __future__ import annotations
+
+from itertools import product
 
 
-VOWELS = set("aeiou")
+# =========================================================
+# CONSTANTS
+# =========================================================
 
-BAD_CLUSTERS = {
-    "qz", "zq", "qx", "xq",
-    "qj", "jq", "zx", "xz",
-    "qw", "wq", "vj", "jv",
-    "xv", "vx", "zv", "vz",
-}
+LETTERS = "abcdefghijklmnopqrstuvwxyz"
 
-GOOD_CLUSTERS = {
-    "ai", "au", "ea", "ee", "ei", "ia",
-    "ie", "io", "oa", "oe", "oi", "ou",
-    "va", "ve", "vi", "vo",
-    "la", "le", "li", "lo",
-    "na", "ne", "ni", "no",
-    "ra", "re", "ri", "ro",
-    "sa", "se", "si", "so",
-    "ma", "me", "mi", "mo",
-    "ta", "te", "ti", "to",
-}
+MIN_USERNAME_LENGTH = 5
+MAX_USERNAME_LENGTH = 32
 
 
-def vowel_ratio(username: str) -> float:
+# =========================================================
+# VALIDATION
+# =========================================================
+
+def validate_length(
+    length: int,
+) -> bool:
+
+    return (
+        MIN_USERNAME_LENGTH
+        <= length
+        <= MAX_USERNAME_LENGTH
+    )
+
+
+# =========================================================
+# BASIC CANDIDATE CHECK
+# =========================================================
+
+def is_valid_candidate(
+    username: str,
+) -> bool:
+
     if not username:
-        return 0.0
+        return False
 
-    letters = [
-        char for char in username
-        if char.isalpha()
-    ]
+    username = username.lower()
 
-    if not letters:
-        return 0.0
-
-    return sum(
-        char in VOWELS
-        for char in letters
-    ) / len(letters)
-
-
-def alternating_score(username: str) -> float:
-    if len(username) < 2:
-        return 0.0
-
-    transitions = 0
-
-    for first, second in zip(
-        username,
-        username[1:],
+    if not (
+        MIN_USERNAME_LENGTH
+        <= len(username)
+        <= MAX_USERNAME_LENGTH
     ):
-        if (
-            (first in VOWELS)
-            != (second in VOWELS)
-        ):
-            transitions += 1
+        return False
 
-    return transitions / (len(username) - 1)
+    if not username[0].isalpha():
+        return False
 
-
-def bad_cluster_score(username: str) -> float:
-    penalty = 0.0
-
-    for index in range(len(username) - 1):
-        pair = username[index:index + 2]
-
-        if pair in BAD_CLUSTERS:
-            penalty += 2.0
-
-    return penalty
-
-
-def good_cluster_bonus(username: str) -> float:
-    bonus = 0.0
-
-    for index in range(len(username) - 1):
-        pair = username[index:index + 2]
-
-        if pair in GOOD_CLUSTERS:
-            bonus += 0.25
-
-    return min(2.0, bonus)
-
-
-def repetition_penalty(username: str) -> float:
-    penalty = 0.0
-
-    if re.search(r"(.)\1\1", username):
-        penalty += 2.5
-
-    if re.search(r"(.)\1", username):
-        penalty += 0.5
-
-    return penalty
-
-
-def digit_penalty(username: str) -> float:
-    digits = sum(
-        char.isdigit()
+    return all(
+        char in LETTERS
         for char in username
     )
 
-    return min(
-        3.0,
-        digits * 0.75,
-    )
+
+# =========================================================
+# PATTERN GENERATOR
+# =========================================================
+
+def generate_candidates(
+    length: int,
+    limit: int = 1000,
+) -> list[str]:
+
+    if not validate_length(length):
+        return []
+
+    if limit <= 0:
+        return []
+
+    result: list[str] = []
+
+    seen: set[str] = set()
+
+    # -----------------------------------------------------
+    # Для небольших username полный перебор невозможен:
+    #
+    # 5 букв = 11 881 376
+    # 6 букв = 308 915 776
+    #
+    # Поэтому используем набор красивых шаблонов.
+    # -----------------------------------------------------
+
+    patterns = [
+        # Повторы
+        "aabb",
+        "abab",
+        "abba",
+
+        # Чередование
+        "ababab",
+        "abcabc",
+        "abccba",
+
+        # Повтор одной буквы
+        "aaab",
+        "abaa",
+        "baaa",
+
+        # Последовательности
+        "abc",
+        "cba",
+
+        # Более коммерческие структуры
+        "aabbcc",
+        "abac",
+        "abca",
+        "acba",
+    ]
+
+    # -----------------------------------------------------
+    # Для каждой позиции создаём комбинации букв.
+    # -----------------------------------------------------
+
+    for pattern in patterns:
+
+        if len(result) >= limit:
+            break
+
+        if len(pattern) > length:
+            continue
+
+        # -------------------------------------------------
+        # Дополняем шаблон до нужной длины.
+        # -------------------------------------------------
+
+        template = pattern
+
+        while len(template) < length:
+            template += "ab"
+
+        template = template[:length]
+
+        # -------------------------------------------------
+        # Определяем уникальные символы шаблона.
+        # -------------------------------------------------
+
+        unique_symbols = []
+
+        for char in template:
+
+            if char not in unique_symbols:
+                unique_symbols.append(char)
+
+        # -------------------------------------------------
+        # Не больше 4 переменных букв на шаблон.
+        # -------------------------------------------------
+
+        unique_symbols = unique_symbols[:4]
+
+        for values in product(
+            LETTERS,
+            repeat=len(unique_symbols),
+        ):
+
+            mapping = dict(
+                zip(
+                    unique_symbols,
+                    values,
+                )
+            )
+
+            username = "".join(
+                mapping[char]
+                for char in template
+            )
+
+            if not is_valid_candidate(
+                username
+            ):
+                continue
+
+            if username in seen:
+                continue
+
+            seen.add(username)
+
+            result.append(
+                username
+            )
+
+            if len(result) >= limit:
+                return result
+
+    return result
 
 
-def underscore_penalty(username: str) -> float:
-    return username.count("_") * 1.5
+# =========================================================
+# RANDOM-LIKE CANDIDATES
+# =========================================================
+
+def generate_random_candidates(
+    length: int,
+    limit: int = 1000,
+) -> list[str]:
+
+    if not validate_length(length):
+        return []
+
+    if limit <= 0:
+        return []
+
+    result: list[str] = []
+
+    seen: set[str] = set()
+
+    # Используем детерминированные комбинации,
+    # чтобы одинаковый запрос давал стабильные
+    # результаты и не создавал огромную нагрузку.
+
+    for first in LETTERS:
+
+        if len(result) >= limit:
+            break
+
+        for second in LETTERS:
+
+            if len(result) >= limit:
+                break
+
+            prefix = first + second
+
+            remaining = length - 2
+
+            if remaining <= 0:
+                candidate = prefix
+
+                if (
+                    candidate not in seen
+                    and is_valid_candidate(candidate)
+                ):
+                    seen.add(candidate)
+                    result.append(candidate)
+
+                continue
+
+            for suffix in product(
+                LETTERS,
+                repeat=min(
+                    remaining,
+                    2,
+                ),
+            ):
+
+                candidate = (
+                    prefix
+                    + "".join(suffix)
+                )
+
+                # Если username ещё короткий,
+                # дополняем повторением шаблона.
+
+                while len(candidate) < length:
+                    candidate += (
+                        candidate[-1]
+                        if candidate
+                        else "a"
+                    )
+
+                candidate = candidate[:length]
+
+                if not is_valid_candidate(
+                    candidate
+                ):
+                    continue
+
+                if candidate in seen:
+                    continue
+
+                seen.add(candidate)
+
+                result.append(
+                    candidate
+                )
+
+                if len(result) >= limit:
+                    return result
+
+    return result
 
 
-def length_score(username: str) -> float:
-    length = len(username)
+# =========================================================
+# MASK GENERATOR
+# =========================================================
 
-    if length == 5:
-        return 10.0
+def generate_from_mask(
+    mask: str,
+    limit: int = 5000,
+) -> list[str]:
 
-    if length == 6:
-        return 9.5
+    mask = mask.lower().strip()
 
-    if length == 7:
-        return 8.5
-
-    if length == 8:
-        return 7.5
-
-    if length == 9:
-        return 6.5
-
-    if length <= 12:
-        return 5.0
-
-    return 3.0
-
-
-def readability_score(username: str) -> float:
-    if not username:
-        return 0.0
-
-    score = 5.0
-
-    ratio = vowel_ratio(username)
-
-    if 0.30 <= ratio <= 0.60:
-        score += 2.0
-    elif 0.20 <= ratio <= 0.70:
-        score += 1.0
-    else:
-        score -= 1.5
-
-    score += alternating_score(username) * 1.5
-
-    score += good_cluster_bonus(username)
-
-    score -= bad_cluster_score(username)
-    score -= repetition_penalty(username)
-    score -= digit_penalty(username)
-    score -= underscore_penalty(username)
-
-    return round(
-        max(0.0, min(10.0, score)),
-        2,
-    )
-
-
-def beauty_score(username: str) -> float:
-    readability = readability_score(username)
-    length = length_score(username)
-
-    score = (
-        readability * 0.70
-        + length * 0.30
-    )
-
-    return round(
-        max(0.0, min(10.0, score)),
-        2,
-    )
-
-
-def is_beautiful(username: str) -> bool:
-    username = username.lower()
-
-    if not re.fullmatch(
-        r"[a-z0-9_]+",
-        username,
+    if not (
+        MIN_USERNAME_LENGTH
+        <= len(mask)
+        <= MAX_USERNAME_LENGTH
     ):
-        return False
+        return []
 
-    if len(username) < 5:
-        return False
+    if not all(
+        char == "?"
+        or char in LETTERS
+        for char in mask
+    ):
+        return []
 
-    if username.startswith("_"):
-        return False
+    if limit <= 0:
+        return []
 
-    if username.endswith("_"):
-        return False
+    unknown_count = mask.count("?")
 
-    if bad_cluster_score(username) >= 2:
-        return False
+    if unknown_count == 0:
 
-    if repetition_penalty(username) >= 2.5:
-        return False
+        if is_valid_candidate(mask):
+            return [mask]
 
-    if readability_score(username) < 6.0:
-        return False
+        return []
 
-    return True
+    # -----------------------------------------------------
+    # Без ограничения количество вариантов может
+    # взорваться:
+    #
+    # 5 ? = 11 881 376
+    # 6 ? = 308 915 776
+    #
+    # Поэтому разрешаем максимум 5 неизвестных.
+    # -----------------------------------------------------
+
+    if unknown_count > 5:
+        return []
+
+    positions = [
+        index
+        for index, char in enumerate(mask)
+        if char == "?"
+    ]
+
+    result: list[str] = []
+
+    seen: set[str] = set()
+
+    for letters in product(
+        LETTERS,
+        repeat=unknown_count,
+    ):
+
+        chars = list(mask)
+
+        for position, letter in zip(
+            positions,
+            letters,
+        ):
+            chars[position] = letter
+
+        username = "".join(chars)
+
+        if not is_valid_candidate(
+            username
+        ):
+            continue
+
+        if username in seen:
+            continue
+
+        seen.add(username)
+
+        result.append(
+            username
+        )
+
+        if len(result) >= limit:
+            break
+
+    return result
