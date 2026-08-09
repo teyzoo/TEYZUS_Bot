@@ -1,21 +1,28 @@
-from database.repositories.shop import (
-    get_shop_listings,
-    get_shop_listing,
-    get_shop_categories,
-    is_favorite,
-    add_favorite,
-    remove_favorite,
-    create_shop_listing,
-    increment_listing_views,
+from database.repositories.base import (
+    BaseRepository,
 )
 
+from database.repositories.shop import (
+    ShopRepository,
+)
+
+from database.repositories.cases import (
+    CaseRepository,
+)
+
+from database.repositories.tasks import (
+    TaskRepository,
+)
+
+from database.repositories.promo import (
+    PromoRepository,
+)
+
+
 __all__ = [
-    "get_shop_listings",
-    "get_shop_listing",
-    "get_shop_categories",
-    "is_favorite",
-    "add_favorite",
-    "remove_favorite",
-    "create_shop_listing",
-    "increment_listing_views",
+    "BaseRepository",
+    "ShopRepository",
+    "CaseRepository",
+    "TaskRepository",
+    "PromoRepository",
 ]
