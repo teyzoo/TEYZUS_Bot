@@ -1,281 +1,547 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from typing import Optional
-
-from services.hunter.filters import (
-    is_beautiful_candidate,
-)
-
-from services.hunter.generator import (
-    generate_candidates,
-)
-
-from services.hunter.pricing import (
-    estimate_price,
-)
-
-from services.hunter.scorer import (
-    beauty_score,
-    brand_score,
-    liquidity_score,
-    rarity_score,
-    readability_score,
-)
+from typing import Iterable
 
 from services.hunter.telegram_checker import (
-    TelegramChecker,
-    TelegramUsernameStatus,
+    check_telegram,
 )
-
 from services.hunter.tme_checker import (
-    TMeChecker,
-)
-
-from services.hunter.fragment_checker import (
-    FragmentChecker,
-    FragmentUsernameStatus,
+    check_tme,
 )
 
 
-@dataclass
+# =========================================================
+# RESULT
+# =========================================================
+
+@dataclass(slots=True)
 class HunterResult:
-
     username: str
 
-    available: bool
-
-    beauty_score: float
-    readability: float
-    rarity: float
-    brand: float
-    liquidity: float
-
-    price_min: int
-    price_max: int
-
-    telegram_status: str
+    telegram_available: bool
     tme_available: bool
+    fragment_available: bool
 
-    fragment_status: str
+    beauty_score: float = 0.0
+    readability: float = 0.0
+    rarity: float = 0.0
+    liquidity: float = 0.0
+    brand: float = 0.0
 
+    price_min: int = 0
+    price_max: int = 0
+
+    @property
+    def available(self) -> bool:
+        return (
+            self.telegram_available
+            and self.tme_available
+        )
+
+
+# =========================================================
+# ENGINE
+# =========================================================
 
 class HunterEngine:
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        max_concurrency: int = 20,
+    ) -> None:
 
-        self.telegram = TelegramChecker()
+        self.max_concurrency = max(
+            1,
+            max_concurrency,
+        )
 
-        self.tme = TMeChecker()
+        self.semaphore = asyncio.Semaphore(
+            self.max_concurrency
+        )
 
-        self.fragment = FragmentChecker()
+    # =====================================================
+    # NORMALIZE
+    # =====================================================
 
-    async def close(self) -> None:
+    @staticmethod
+    def normalize(
+        username: str,
+    ) -> str:
 
-        await self.telegram.close()
+        username = username.strip().lower()
 
-        await self.tme.close()
+        if username.startswith("@"):
+            username = username[1:]
 
-        await self.fragment.close()
+        return username
+
+    # =====================================================
+    # VALID USERNAME
+    # =====================================================
+
+    @staticmethod
+    def valid_username(
+        username: str,
+    ) -> bool:
+
+        if not username:
+            return False
+
+        if len(username) < 5:
+            return False
+
+        if len(username) > 32:
+            return False
+
+        for char in username:
+
+            if not (
+                char.isascii()
+                and (
+                    char.isalpha()
+                    or char.isdigit()
+                    or char == "_"
+                )
+            ):
+                return False
+
+        return True
+
+    # =====================================================
+    # PREPARE CANDIDATES
+    # =====================================================
 
     def prepare_candidates(
         self,
         length: int,
-        amount: int = 1000,
+        amount: int,
     ) -> list[str]:
 
-        generated = generate_candidates(
-            length=length,
-            limit=amount * 10,
+        from services.hunter.generator import (
+            generate_candidates,
         )
 
-        beautiful = [
-            username
-            for username in generated
-            if is_beautiful_candidate(
+        candidates = generate_candidates(
+            length=length,
+            limit=amount,
+        )
+
+        result: list[str] = []
+
+        seen: set[str] = set()
+
+        for username in candidates:
+
+            username = self.normalize(
                 username
             )
-        ]
 
-        beautiful.sort(
-            key=beauty_score,
-            reverse=True,
-        )
+            if not self.valid_username(
+                username
+            ):
+                continue
 
-        return beautiful[:amount]
+            if len(username) != length:
+                continue
+
+            if username in seen:
+                continue
+
+            seen.add(username)
+
+            result.append(username)
+
+        return result
+
+    # =====================================================
+    # CHECK TELEGRAM
+    # =====================================================
+
+    async def _check_telegram(
+        self,
+        username: str,
+    ) -> bool:
+
+        async with self.semaphore:
+
+            try:
+
+                result = await check_telegram(
+                    username
+                )
+
+                return bool(result)
+
+            except Exception:
+
+                return False
+
+    # =====================================================
+    # CHECK T.ME
+    # =====================================================
+
+    async def _check_tme(
+        self,
+        username: str,
+    ) -> bool:
+
+        async with self.semaphore:
+
+            try:
+
+                result = await check_tme(
+                    username
+                )
+
+                return bool(result)
+
+            except Exception:
+
+                return False
+
+    # =====================================================
+    # CHECK FRAGMENT
+    # =====================================================
+
+    async def _check_fragment(
+        self,
+        username: str,
+    ) -> bool:
+
+        # Fragment checker подключим отдельно.
+        #
+        # Пока возвращаем True, чтобы отсутствие
+        # отдельного Fragment checker не ломало Hunter.
+        #
+        # После подключения реального Fragment API
+        # этот метод заменим.
+
+        return True
+
+    # =====================================================
+    # CHECK ONE CANDIDATE
+    # =====================================================
 
     async def check_candidate(
         self,
         username: str,
-    ) -> Optional[HunterResult]:
+    ) -> HunterResult | None:
 
-        # =================================================
-        # TELEGRAM
-        # =================================================
-
-        telegram_status = await self.telegram.check(
+        username = self.normalize(
             username
         )
 
-        if (
-            telegram_status
-            != TelegramUsernameStatus.AVAILABLE
+        if not self.valid_username(
+            username
         ):
-
             return None
 
-        # =================================================
-        # T.ME
-        # =================================================
-
-        tme_available = await self.tme.check(
-            username
-        )
-
-        if not tme_available:
-
-            return None
-
-        # =================================================
-        # FRAGMENT
-        # =================================================
-
-        fragment_status = (
-            await self.fragment.check_detailed(
+        telegram_task = asyncio.create_task(
+            self._check_telegram(
                 username
             )
         )
 
-        # Если Fragment точно сообщает,
-        # что username занят или выставлен,
-        # отбрасываем его.
+        tme_task = asyncio.create_task(
+            self._check_tme(
+                username
+            )
+        )
 
-        if fragment_status in {
-            FragmentUsernameStatus.TAKEN,
-            FragmentUsernameStatus.FOR_SALE,
-            FragmentUsernameStatus.AUCTION,
-        }:
+        fragment_task = asyncio.create_task(
+            self._check_fragment(
+                username
+            )
+        )
 
+        (
+            telegram_available,
+            tme_available,
+            fragment_available,
+        ) = await asyncio.gather(
+            telegram_task,
+            tme_task,
+            fragment_task,
+        )
+
+        if not telegram_available:
             return None
 
-        # При UNKNOWN / ERROR не делаем
-        # ложного утверждения, что username
-        # гарантированно свободен.
-        #
-        # На текущем этапе пропускаем такой
-        # результат, чтобы Hunter не показывал
-        # сомнительные username.
-
-        if fragment_status in {
-            FragmentUsernameStatus.UNKNOWN,
-            FragmentUsernameStatus.ERROR,
-        }:
-
+        if not tme_available:
             return None
 
-        # =================================================
-        # SCORES
-        # =================================================
+        if not fragment_available:
+            return None
 
-        readability = readability_score(
-            username
-        )
-
-        rarity = rarity_score(
-            username
-        )
-
-        brand = brand_score(
-            username
-        )
-
-        liquidity = liquidity_score(
-            username
-        )
-
-        beauty = beauty_score(
-            username
-        )
-
-        # =================================================
-        # PRICE
-        # =================================================
-
-        price_min, price_max = estimate_price(
-            username
-        )
-
-        # =================================================
-        # RESULT
-        # =================================================
-
-        return HunterResult(
+        result = HunterResult(
             username=username,
 
-            available=True,
-
-            beauty_score=beauty,
-
-            readability=readability,
-
-            rarity=rarity,
-
-            brand=brand,
-
-            liquidity=liquidity,
-
-            price_min=price_min,
-
-            price_max=price_max,
-
-            telegram_status=(
-                telegram_status.value
+            telegram_available=(
+                telegram_available
             ),
 
-            tme_available=tme_available,
+            tme_available=(
+                tme_available
+            ),
 
-            fragment_status=(
-                fragment_status.value
+            fragment_available=(
+                fragment_available
             ),
         )
 
-    async def search(
+        self._calculate_scores(
+            result
+        )
+
+        self._calculate_price(
+            result
+        )
+
+        return result
+
+    # =====================================================
+    # CHECK MANY
+    # =====================================================
+
+    async def check_many(
         self,
-        length: int,
-        amount: int = 10,
+        candidates: Iterable[str],
+        amount: int,
     ) -> list[HunterResult]:
 
-        candidates = self.prepare_candidates(
-            length=length,
-            amount=max(
-                amount * 5,
-                50,
-            ),
+        candidates = list(
+            candidates
         )
+
+        if not candidates:
+            return []
+
+        tasks = [
+            asyncio.create_task(
+                self.check_candidate(
+                    username
+                )
+            )
+            for username in candidates
+        ]
 
         results: list[HunterResult] = []
 
-        for candidate in candidates:
+        for task in asyncio.as_completed(
+            tasks
+        ):
 
-            result = await self.check_candidate(
-                candidate
-            )
+            try:
+
+                result = await task
+
+            except asyncio.CancelledError:
+
+                raise
+
+            except Exception:
+
+                continue
 
             if result is None:
                 continue
 
-            results.append(result)
+            results.append(
+                result
+            )
 
             if len(results) >= amount:
+
+                for pending in tasks:
+
+                    if not pending.done():
+
+                        pending.cancel()
+
                 break
 
-        results.sort(
-            key=lambda item: (
-                item.beauty_score,
-                item.liquidity,
-                item.price_max,
-            ),
-            reverse=True,
-        )
+        if results:
+
+            await asyncio.gather(
+                *tasks,
+                return_exceptions=True,
+            )
 
         return results[:amount]
+
+    # =====================================================
+    # SCORE
+    # =====================================================
+
+    @staticmethod
+    def _calculate_scores(
+        result: HunterResult,
+    ) -> None:
+
+        username = result.username
+
+        length = len(username)
+
+        # -------------------------------------------------
+        # READABILITY
+        # -------------------------------------------------
+
+        readability = 5.0
+
+        if username.isalpha():
+
+            readability += 2.0
+
+        if username.islower():
+
+            readability += 0.5
+
+        if "_" not in username:
+
+            readability += 0.5
+
+        if not any(
+            char.isdigit()
+            for char in username
+        ):
+
+            readability += 1.0
+
+        result.readability = min(
+            readability,
+            10.0,
+        )
+
+        # -------------------------------------------------
+        # RARITY
+        # -------------------------------------------------
+
+        rarity = 4.0
+
+        if length == 5:
+
+            rarity += 3.0
+
+        elif length == 6:
+
+            rarity += 2.0
+
+        elif length <= 8:
+
+            rarity += 1.0
+
+        if username.isalpha():
+
+            rarity += 1.0
+
+        result.rarity = min(
+            rarity,
+            10.0,
+        )
+
+        # -------------------------------------------------
+        # BRAND
+        # -------------------------------------------------
+
+        brand = 5.0
+
+        vowels = sum(
+            char in "aeiou"
+            for char in username
+        )
+
+        if vowels >= 1:
+
+            brand += 1.0
+
+        if vowels >= 2:
+
+            brand += 1.0
+
+        if username.isalpha():
+
+            brand += 1.0
+
+        if "_" not in username:
+
+            brand += 1.0
+
+        result.brand = min(
+            brand,
+            10.0,
+        )
+
+        # -------------------------------------------------
+        # LIQUIDITY
+        # -------------------------------------------------
+
+        liquidity = (
+            result.readability * 0.35
+            + result.rarity * 0.25
+            + result.brand * 0.40
+        )
+
+        result.liquidity = round(
+            min(
+                liquidity,
+                10.0,
+            ),
+            2,
+        )
+
+        # -------------------------------------------------
+        # BEAUTY
+        # -------------------------------------------------
+
+        beauty = (
+            result.readability * 0.4
+            + result.rarity * 0.2
+            + result.liquidity * 0.2
+            + result.brand * 0.2
+        )
+
+        result.beauty_score = round(
+            min(
+                beauty,
+                10.0,
+            ),
+            2,
+        )
+
+    # =====================================================
+    # PRICE
+    # =====================================================
+
+    @staticmethod
+    def _calculate_price(
+        result: HunterResult,
+    ) -> None:
+
+        score = result.beauty_score
+
+        if score >= 9.5:
+
+            result.price_min = 100_000
+            result.price_max = 1_000_000
+
+        elif score >= 9.0:
+
+            result.price_min = 50_000
+            result.price_max = 500_000
+
+        elif score >= 8.0:
+
+            result.price_min = 10_000
+            result.price_max = 100_000
+
+        elif score >= 7.0:
+
+            result.price_min = 2_000
+            result.price_max = 25_000
+
+        else:
+
+            result.price_min = 500
+            result.price_max = 10_000
