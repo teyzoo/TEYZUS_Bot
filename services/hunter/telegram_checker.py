@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 import asyncio
-import logging
-from enum import StrEnum
+from typing import Optional
 
 from telethon import TelegramClient
 from telethon.errors import (
@@ -8,76 +9,127 @@ from telethon.errors import (
     UsernameInvalidError,
     UsernameNotOccupiedError,
 )
+from telethon.tl.functions.contacts import ResolveUsernameRequest
 
-from config import settings
-
-
-logger = logging.getLogger("TEYZUS.telegram_checker")
+from config import API_ID, API_HASH
 
 
-class TelegramUsernameStatus(StrEnum):
-    AVAILABLE = "available"
-    OCCUPIED = "occupied"
-    INVALID = "invalid"
-    FLOOD_WAIT = "flood_wait"
-    ERROR = "error"
+# =========================================================
+# TELEGRAM CLIENT
+# =========================================================
+
+client = TelegramClient(
+    "checker",
+    API_ID,
+    API_HASH,
+)
 
 
-class TelegramChecker:
+# =========================================================
+# LOCK
+# =========================================================
 
-    def __init__(self) -> None:
-        self.client = TelegramClient(
-            "teyzus_checker",
-            settings.telegram_api_id,
-            settings.telegram_api_hash,
+_connect_lock = asyncio.Lock()
+
+
+# =========================================================
+# CONNECT
+# =========================================================
+
+async def ensure_connected() -> None:
+
+    if client.is_connected():
+        return
+
+    async with _connect_lock:
+
+        if client.is_connected():
+            return
+
+        await client.connect()
+
+
+# =========================================================
+# CHECK USERNAME
+# =========================================================
+
+async def check_telegram(
+    username: str,
+) -> bool:
+
+    username = username.strip()
+
+    if username.startswith("@"):
+        username = username[1:]
+
+    username = username.lower()
+
+    if not username:
+        return False
+
+    try:
+
+        await ensure_connected()
+
+        result = await client(
+            ResolveUsernameRequest(
+                username=username
+            )
         )
 
-        self._lock = asyncio.Lock()
+        # -------------------------------------------------
+        # Если Telegram вернул entity,
+        # username уже занят.
+        # -------------------------------------------------
 
-    async def connect(self) -> None:
-        if not self.client.is_connected():
-            await self.client.connect()
+        if result.users:
 
-    async def close(self) -> None:
-        if self.client.is_connected():
-            await self.client.disconnect()
+            return False
 
-    async def check(
-        self,
-        username: str,
-    ) -> TelegramUsernameStatus:
+        if result.chats:
 
-        username = username.lstrip("@")
+            return False
 
-        async with self._lock:
+        # -------------------------------------------------
+        # Нет entity -> username может быть свободен.
+        # -------------------------------------------------
 
-            try:
-                await self.connect()
+        return True
 
-                await self.client.get_entity(
-                    username
-                )
+    except UsernameNotOccupiedError:
 
-                return TelegramUsernameStatus.OCCUPIED
+        return True
 
-            except UsernameNotOccupiedError:
-                return TelegramUsernameStatus.AVAILABLE
+    except UsernameInvalidError:
 
-            except UsernameInvalidError:
-                return TelegramUsernameStatus.INVALID
+        return False
 
-            except FloodWaitError as error:
-                logger.warning(
-                    "Telegram flood wait: %s seconds",
-                    error.seconds,
-                )
+    except FloodWaitError as error:
 
-                return TelegramUsernameStatus.FLOOD_WAIT
+        # Не пытаемся спамить Telegram во время FloodWait.
+        await asyncio.sleep(
+            error.seconds
+        )
 
-            except Exception:
-                logger.exception(
-                    "Telegram checker error for @%s",
-                    username,
-                )
+        return await check_telegram(
+            username
+        )
 
-                return TelegramUsernameStatus.ERROR
+    except asyncio.CancelledError:
+
+        raise
+
+    except Exception:
+
+        return False
+
+
+# =========================================================
+# DISCONNECT
+# =========================================================
+
+async def close_telegram() -> None:
+
+    if client.is_connected():
+
+        await client.disconnect()
