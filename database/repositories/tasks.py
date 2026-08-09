@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Optional
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,219 +12,249 @@ from database.models import (
 )
 
 
-class TaskRepository:
-    def __init__(
-        self,
-        session: AsyncSession,
-    ) -> None:
-        self.session = session
+# =========================================================
+# TIME
+# =========================================================
 
-    # =====================================================
-    # TASK
-    # =====================================================
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
-    async def get_task(
-        self,
-        task_id: int,
-    ) -> Task | None:
 
-        result = await self.session.execute(
-            select(Task).where(
-                Task.id == task_id
-            )
+# =========================================================
+# GET TASK
+# =========================================================
+
+async def get_task(
+    session: AsyncSession,
+    task_id: int,
+) -> Optional[Task]:
+    result = await session.execute(
+        select(Task).where(
+            Task.id == task_id
         )
+    )
 
-        return result.scalar_one_or_none()
+    return result.scalar_one_or_none()
 
-    async def get_active_tasks(
-        self,
-    ) -> list[Task]:
 
-        result = await self.session.execute(
-            select(Task)
-            .where(
-                Task.is_active
-                == True
-            )
-            .order_by(
-                Task.sort_order.asc(),
-                Task.id.asc(),
-            )
+# =========================================================
+# GET ACTIVE TASKS
+# =========================================================
+
+async def get_active_tasks(
+    session: AsyncSession,
+) -> list[Task]:
+
+    now = utc_now()
+
+    result = await session.execute(
+        select(Task)
+        .where(
+            Task.is_active.is_(True)
         )
-
-        return list(
-            result.scalars().all()
+        .where(
+            (Task.starts_at.is_(None))
+            | (Task.starts_at <= now)
         )
-
-    async def get_tasks_by_period(
-        self,
-        period_type: str,
-    ) -> list[Task]:
-
-        result = await self.session.execute(
-            select(Task)
-            .where(
-                Task.is_active
-                == True,
-                Task.period_type
-                == period_type,
-            )
-            .order_by(
-                Task.sort_order.asc()
-            )
+        .where(
+            (Task.expires_at.is_(None))
+            | (Task.expires_at >= now)
         )
-
-        return list(
-            result.scalars().all()
+        .order_by(
+            Task.sort_order.asc(),
+            Task.id.desc(),
         )
+    )
 
-    async def create_task(
-        self,
-        **kwargs,
-    ) -> Task:
+    return list(
+        result.scalars().all()
+    )
 
-        task = Task(
-            **kwargs
+
+# =========================================================
+# GET TASK COMPLETION
+# =========================================================
+
+async def get_user_task_completions(
+    session: AsyncSession,
+    task_id: int,
+    user_id: int,
+) -> list[TaskCompletion]:
+
+    result = await session.execute(
+        select(TaskCompletion)
+        .where(
+            TaskCompletion.task_id == task_id
         )
-
-        self.session.add(
-            task
+        .where(
+            TaskCompletion.user_id == user_id
         )
-
-        await self.session.flush()
-
-        return task
-
-    async def update_task(
-        self,
-        task: Task,
-        **kwargs,
-    ) -> Task:
-
-        for key, value in kwargs.items():
-
-            if hasattr(task, key):
-                setattr(
-                    task,
-                    key,
-                    value,
-                )
-
-        await self.session.flush()
-
-        return task
-
-    async def delete_task(
-        self,
-        task: Task,
-    ) -> None:
-
-        await self.session.delete(
-            task
+        .order_by(
+            TaskCompletion.completed_at.desc()
         )
+    )
 
-        await self.session.flush()
+    return list(
+        result.scalars().all()
+    )
 
-    # =====================================================
-    # COMPLETION
-    # =====================================================
 
-    async def get_completion(
-        self,
-        task_id: int,
-        user_id: int,
-        period_key: str | None,
-    ) -> TaskCompletion | None:
+# =========================================================
+# COMPLETION COUNT
+# =========================================================
 
-        query = select(
-            TaskCompletion
-        ).where(
-            TaskCompletion.task_id
-            == task_id,
-            TaskCompletion.user_id
-            == user_id,
+async def get_user_task_completion_count(
+    session: AsyncSession,
+    task_id: int,
+    user_id: int,
+) -> int:
+
+    result = await session.execute(
+        select(
+            func.count(TaskCompletion.id)
         )
-
-        if period_key is None:
-
-            query = query.where(
-                TaskCompletion.period_key
-                .is_(None)
-            )
-
-        else:
-
-            query = query.where(
-                TaskCompletion.period_key
-                == period_key
-            )
-
-        result = await self.session.execute(
-            query
+        .where(
+            TaskCompletion.task_id == task_id
         )
-
-        return result.scalar_one_or_none()
-
-    async def get_user_completions(
-        self,
-        user_id: int,
-        task_id: int,
-    ) -> list[TaskCompletion]:
-
-        result = await self.session.execute(
-            select(TaskCompletion)
-            .where(
-                TaskCompletion.user_id
-                == user_id,
-                TaskCompletion.task_id
-                == task_id,
-            )
-            .order_by(
-                TaskCompletion.completed_at.desc()
-            )
+        .where(
+            TaskCompletion.user_id == user_id
         )
+    )
 
-        return list(
-            result.scalars().all()
-        )
+    return int(
+        result.scalar() or 0
+    )
 
-    async def count_user_completions(
-        self,
-        user_id: int,
-        task_id: int,
-    ) -> int:
 
-        result = await self.session.execute(
-            select(
-                func.count(
-                    TaskCompletion.id
-                )
-            )
-            .where(
-                TaskCompletion.user_id
-                == user_id,
-                TaskCompletion.task_id
-                == task_id,
-            )
-        )
+# =========================================================
+# CREATE COMPLETION
+# =========================================================
 
-        return int(
-            result.scalar_one()
-        )
+async def create_task_completion(
+    session: AsyncSession,
+    task: Task,
+    user_id: int,
+    telegram_id: int,
+) -> TaskCompletion:
 
-    async def create_completion(
-        self,
-        **kwargs,
-    ) -> TaskCompletion:
+    completion = TaskCompletion(
+        task_id=task.id,
+        user_id=user_id,
+        telegram_id=telegram_id,
+        reward_type=task.reward_type,
+        reward_amount=task.reward_amount,
+        premium_days=task.premium_days,
+        completed_at=utc_now(),
+    )
 
-        completion = TaskCompletion(
-            **kwargs
-        )
+    session.add(completion)
 
-        self.session.add(
-            completion
-        )
+    task.completions_count += 1
 
-        await self.session.flush()
+    await session.flush()
 
-        return completion
+    return completion
+
+
+# =========================================================
+# DEACTIVATE TASK
+# =========================================================
+
+async def deactivate_task(
+    session: AsyncSession,
+    task: Task,
+) -> None:
+
+    task.is_active = False
+
+    await session.flush()
+
+
+# =========================================================
+# TASKS FOR PERIOD
+# =========================================================
+
+async def get_tasks_by_period(
+    session: AsyncSession,
+    period: str,
+) -> list[Task]:
+
+    tasks = await get_active_tasks(
+        session
+    )
+
+    return [
+        task
+        for task in tasks
+        if get_task_period(task) == period
+    ]
+
+
+# =========================================================
+# TASK PERIOD
+# =========================================================
+
+def get_task_period(
+    task: Task,
+) -> str:
+
+    """
+    Определяет период задания.
+
+    Для совместимости со старой моделью:
+    период вычисляется по target_value.
+
+    В дальнейшем можно добавить
+    отдельное поле period в Task.
+    """
+
+    value = (
+        task.target_value or ""
+    ).lower()
+
+    if value.startswith(
+        "daily:"
+    ):
+        return "daily"
+
+    if value.startswith(
+        "weekly:"
+    ):
+        return "weekly"
+
+    if value.startswith(
+        "monthly:"
+    ):
+        return "monthly"
+
+    return "permanent"
+
+
+# =========================================================
+# TASK TYPE CHECK
+# =========================================================
+
+def normalize_task_type(
+    task_type: str,
+) -> str:
+
+    return (
+        task_type
+        .strip()
+        .lower()
+    )
+
+
+# =========================================================
+# TASK REWARD CHECK
+# =========================================================
+
+def normalize_reward_type(
+    reward_type: str,
+) -> str:
+
+    return (
+        reward_type
+        .strip()
+        .lower()
+    )
