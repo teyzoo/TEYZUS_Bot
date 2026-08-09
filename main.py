@@ -37,6 +37,9 @@ from bot.handlers.admin_promo import (
     router as admin_promo_router,
 )
 
+from bot.handlers.shop import (
+    router as shop_router,
+)
 
 # =========================================================
 # LOGGING
@@ -178,7 +181,9 @@ def create_dispatcher() -> Dispatcher:
     )
 
     return dispatcher
-
+dispatcher.include_router(
+    shop_router
+)
 
 # =========================================================
 # BOT RUNNER
