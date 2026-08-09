@@ -14,6 +14,35 @@ from database.base import Base
 
 
 # =========================================================
+# IMPORT ALL MODELS
+# =========================================================
+
+# Важно:
+# модели должны быть импортированы ДО create_all(),
+# чтобы SQLAlchemy зарегистрировал все таблицы.
+
+from database.models import (  # noqa: F401
+    User,
+    PromoCode,
+    PromoActivation,
+    Task,
+    TaskCompletion,
+)
+
+from database.shop_models import (  # noqa: F401
+    ShopCategory,
+    SellerProfile,
+    ShopListing,
+    ShopFavorite,
+    ShopCartItem,
+    ShopPurchase,
+    ShopDeal,
+    ShopReview,
+    ShopSettings,
+)
+
+
+# =========================================================
 # DATABASE ENGINE
 # =========================================================
 
@@ -44,15 +73,6 @@ async_session_factory = async_sessionmaker(
 
 @asynccontextmanager
 async def get_session() -> AsyncIterator[AsyncSession]:
-    """
-    Создаёт AsyncSession и автоматически закрывает её.
-
-    Использование:
-
-        async with get_session() as session:
-            ...
-    """
-
     session = async_session_factory()
 
     try:
@@ -71,30 +91,6 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 # =========================================================
 
 async def init_database() -> None:
-    # Важно импортировать весь models.py,
-    # чтобы SQLAlchemy зарегистрировал
-    # ВСЕ таблицы TEYZUS.
-    import database.models  # noqa: F401
-
-    async with engine.begin() as connection:
-        await connection.run_sync(
-            Base.metadata.create_all
-        )
-        PromoCode,
-        PromoActivation,
-        Task,
-        TaskCompletion,
-    )
-
-    # Убираем предупреждение линтера
-    _ = (
-        User,
-        PromoCode,
-        PromoActivation,
-        Task,
-        TaskCompletion,
-    )
-
     async with engine.begin() as connection:
         await connection.run_sync(
             Base.metadata.create_all
@@ -106,8 +102,4 @@ async def init_database() -> None:
 # =========================================================
 
 async def close_database() -> None:
-    """
-    Полностью закрывает connection pool.
-    """
-
     await engine.dispose()
