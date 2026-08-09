@@ -44,15 +44,6 @@ async_session_factory = async_sessionmaker(
 
 @asynccontextmanager
 async def get_session() -> AsyncIterator[AsyncSession]:
-    """
-    Создаёт AsyncSession и автоматически закрывает её.
-
-    Использование:
-
-        async with get_session() as session:
-            ...
-    """
-
     session = async_session_factory()
 
     try:
@@ -71,54 +62,16 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 # =========================================================
 
 async def init_database() -> None:
-    """
-    Регистрирует все SQLAlchemy-модели и создаёт
-    отсутствующие таблицы.
 
-    Важно:
-    импорт моделей должен произойти ДО create_all(),
-    иначе SQLAlchemy не будет знать о новых таблицах.
-    """
+    # ВАЖНО:
+    # импортируем models целиком,
+    # чтобы SQLAlchemy зарегистрировал
+    # все таблицы.
 
-    # Основные модели
-    from database.models import (
-        User,
-        PromoCode,
-        PromoActivation,
-        Task,
-        TaskCompletion,
-    )
-
-    # TEYZUS SHOP
-    from database.shop_models import (
-        ShopCategory,
-        ShopListing,
-        ShopFavorite,
-        ShopCartItem,
-        ShopPurchase,
-        ShopDeal,
-        SellerProfile,
-        ShopReview,
-    )
-
-    # Используем импорты, чтобы линтеры не удаляли их.
-    _ = (
-        User,
-        PromoCode,
-        PromoActivation,
-        Task,
-        TaskCompletion,
-        ShopCategory,
-        ShopListing,
-        ShopFavorite,
-        ShopCartItem,
-        ShopPurchase,
-        ShopDeal,
-        SellerProfile,
-        ShopReview,
-    )
+    from database import models  # noqa: F401
 
     async with engine.begin() as connection:
+
         await connection.run_sync(
             Base.metadata.create_all
         )
