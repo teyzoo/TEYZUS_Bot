@@ -79,6 +79,10 @@ class User(Base):
         index=True,
     )
 
+    # =====================================================
+    # PREMIUM
+    # =====================================================
+
     premium_active: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
@@ -89,6 +93,10 @@ class User(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+
+    # =====================================================
+    # BALANCES
+    # =====================================================
 
     balance_rub: Mapped[int] = mapped_column(
         Integer,
@@ -101,6 +109,40 @@ class User(Base):
         default=0,
         nullable=False,
     )
+
+    # =====================================================
+    # BONUS SEARCHES
+    # =====================================================
+
+    bonus_searches: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    # =====================================================
+    # BONUS TRAPS
+    # =====================================================
+
+    bonus_traps: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    # =====================================================
+    # DISCOUNT
+    # =====================================================
+
+    discount_percent: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    # =====================================================
+    # REFERRAL
+    # =====================================================
 
     referral_code: Mapped[str] = mapped_column(
         String(64),
@@ -115,6 +157,10 @@ class User(Base):
         index=True,
     )
 
+    # =====================================================
+    # SEARCH LIMIT
+    # =====================================================
+
     successful_searches_today: Mapped[int] = mapped_column(
         Integer,
         default=0,
@@ -126,17 +172,29 @@ class User(Base):
         nullable=True,
     )
 
+    # =====================================================
+    # NOTIFICATIONS
+    # =====================================================
+
     notifications_enabled: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
         nullable=False,
     )
 
+    # =====================================================
+    # BLOCK
+    # =====================================================
+
     is_blocked: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
         nullable=False,
     )
+
+    # =====================================================
+    # DATES
+    # =====================================================
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -227,8 +285,6 @@ class PromoCode(Base):
         nullable=False,
     )
 
-    # Telegram ID пользователей через запятую.
-    # None = доступ всем.
     allowed_user_ids: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
@@ -334,6 +390,10 @@ class Task(Base):
         autoincrement=True,
     )
 
+    # =====================================================
+    # BASIC
+    # =====================================================
+
     title: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
@@ -344,18 +404,9 @@ class Task(Base):
         nullable=True,
     )
 
-    # -----------------------------------------------------
+    # =====================================================
     # TASK TYPE
-    #
-    # subscribe
-    # referral
-    # search
-    # purchase
-    # premium
-    # topup
-    # case
-    # custom
-    # -----------------------------------------------------
+    # =====================================================
 
     task_type: Mapped[str] = mapped_column(
         String(64),
@@ -363,38 +414,46 @@ class Task(Base):
         index=True,
     )
 
-    # -----------------------------------------------------
-    # TARGET
+    # Например:
     #
-    # Примеры:
-    #
-    # subscribe -> @TEYZUS
-    # referral  -> 3
-    # search    -> 5
-    # purchase  -> 100
-    # case      -> 1
-    # -----------------------------------------------------
+    # subscribe_channel
+    # referral
+    # search
+    # promo
+    # premium
+    # open_miniapp
+    # custom
 
+    # Значение, которое нужно выполнить.
+    #
+    # Например:
+    #
+    # @teyzus
+    # 5
+    # https://t.me/...
+    #
     target_value: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
     )
 
-    # -----------------------------------------------------
+    # =====================================================
     # REWARD
-    #
-    # premium
-    # searches
-    # traps
-    # balance_rub
-    # stars
-    # discount
-    # -----------------------------------------------------
+    # =====================================================
 
     reward_type: Mapped[str] = mapped_column(
         String(64),
         nullable=False,
+        index=True,
     )
+
+    # Количество:
+    #
+    # Stars
+    # рублей
+    # поисков
+    # ловушек
+    # процентов скидки
 
     reward_amount: Mapped[int] = mapped_column(
         Integer,
@@ -402,16 +461,17 @@ class Task(Base):
         nullable=False,
     )
 
-    # Если reward_type == premium
+    # Для Premium.
+
     premium_days: Mapped[int] = mapped_column(
         Integer,
         default=0,
         nullable=False,
     )
 
-    # -----------------------------------------------------
-    # GLOBAL LIMIT
-    # -----------------------------------------------------
+    # =====================================================
+    # LIMITS
+    # =====================================================
 
     max_completions: Mapped[Optional[int]] = mapped_column(
         Integer,
@@ -424,9 +484,21 @@ class Task(Base):
         nullable=False,
     )
 
-    # -----------------------------------------------------
+    max_completions_per_user: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        default=1,
+        nullable=True,
+    )
+
+    repeatable: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    # =====================================================
     # USER FILTERS
-    # -----------------------------------------------------
+    # =====================================================
 
     only_new_users: Mapped[bool] = mapped_column(
         Boolean,
@@ -440,9 +512,9 @@ class Task(Base):
         nullable=False,
     )
 
-    # -----------------------------------------------------
+    # =====================================================
     # DATES
-    # -----------------------------------------------------
+    # =====================================================
 
     starts_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
@@ -454,25 +526,9 @@ class Task(Base):
         nullable=True,
     )
 
-    # -----------------------------------------------------
-    # REPEAT
-    # -----------------------------------------------------
-
-    repeatable: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        nullable=False,
-    )
-
-    max_completions_per_user: Mapped[Optional[int]] = mapped_column(
-        Integer,
-        default=1,
-        nullable=True,
-    )
-
-    # -----------------------------------------------------
+    # =====================================================
     # STATUS
-    # -----------------------------------------------------
+    # =====================================================
 
     is_active: Mapped[bool] = mapped_column(
         Boolean,
@@ -481,9 +537,9 @@ class Task(Base):
         index=True,
     )
 
-    # -----------------------------------------------------
-    # DISPLAY
-    # -----------------------------------------------------
+    # =====================================================
+    # SORT
+    # =====================================================
 
     sort_order: Mapped[int] = mapped_column(
         Integer,
@@ -491,19 +547,27 @@ class Task(Base):
         nullable=False,
     )
 
+    # =====================================================
+    # IMAGE
+    # =====================================================
+
     image_file_id: Mapped[Optional[str]] = mapped_column(
         String(512),
         nullable=True,
     )
 
-    # -----------------------------------------------------
+    # =====================================================
     # OWNER
-    # -----------------------------------------------------
+    # =====================================================
 
     created_by: Mapped[int] = mapped_column(
         BigInteger,
         nullable=False,
     )
+
+    # =====================================================
+    # DATES
+    # =====================================================
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -532,6 +596,10 @@ class TaskCompletion(Base):
         autoincrement=True,
     )
 
+    # =====================================================
+    # TASK
+    # =====================================================
+
     task_id: Mapped[int] = mapped_column(
         ForeignKey(
             "tasks.id",
@@ -540,6 +608,10 @@ class TaskCompletion(Base):
         nullable=False,
         index=True,
     )
+
+    # =====================================================
+    # USER
+    # =====================================================
 
     user_id: Mapped[int] = mapped_column(
         ForeignKey(
@@ -556,13 +628,9 @@ class TaskCompletion(Base):
         index=True,
     )
 
-    # -----------------------------------------------------
-    # SNAPSHOT OF REWARD
-    #
-    # Сохраняем награду на момент выполнения.
-    # Если Owner потом изменит задание,
-    # история не изменится.
-    # -----------------------------------------------------
+    # =====================================================
+    # REWARD SNAPSHOT
+    # =====================================================
 
     reward_type: Mapped[str] = mapped_column(
         String(64),
@@ -581,8 +649,13 @@ class TaskCompletion(Base):
         nullable=False,
     )
 
+    # =====================================================
+    # DATE
+    # =====================================================
+
     completed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
         nullable=False,
+        index=True,
     )
