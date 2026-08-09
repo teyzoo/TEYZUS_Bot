@@ -1,202 +1,378 @@
+from __future__ import annotations
+
 from itertools import product
 
-from services.hunter.beauty import (
-    is_beautiful,
-)
-from services.hunter.dictionary import (
-    dictionary_candidates,
-)
-from services.hunter.ranker import (
-    rank_usernames,
-)
+
+# =========================================================
+# CONSTANTS
+# =========================================================
+
+LETTERS = "abcdefghijklmnopqrstuvwxyz"
+
+MIN_USERNAME_LENGTH = 5
+MAX_USERNAME_LENGTH = 32
 
 
-VOWELS = "aeiou"
+# =========================================================
+# VALIDATION
+# =========================================================
 
-CONSONANTS = (
-    "bcdfghjklmnprstvwyz"
-)
-
-SYLLABLES = [
-    "va", "ve", "vi", "vo",
-    "la", "le", "li", "lo",
-    "na", "ne", "ni", "no",
-    "ra", "re", "ri", "ro",
-    "sa", "se", "si", "so",
-    "ma", "me", "mi", "mo",
-    "ta", "te", "ti", "to",
-    "ka", "ke", "ki", "ko",
-    "za", "ze", "zi", "zo",
-]
-
-BRAND_BASES = [
-    "nova",
-    "luna",
-    "vela",
-    "vera",
-    "nexa",
-    "zora",
-    "riva",
-    "mira",
-    "sora",
-    "nora",
-    "aura",
-    "nexo",
-    "nero",
-    "avero",
-    "velor",
-    "valor",
-    "prime",
-    "royal",
-    "elite",
-    "orbit",
-    "pixel",
-    "vision",
-]
-
-
-def generate_pattern(
+def validate_length(
     length: int,
-) -> list[str]:
+) -> bool:
 
-    patterns = []
-
-    if length == 5:
-        patterns = [
-            "CVCVC",
-            "CVCCV",
-            "VCVCV",
-        ]
-
-    elif length == 6:
-        patterns = [
-            "CVCVCV",
-            "CVCCVC",
-            "CVCVCC",
-            "VCVCVC",
-        ]
-
-    elif length == 7:
-        patterns = [
-            "CVCVCVC",
-            "CVCCVCV",
-        ]
-
-    else:
-        return []
-
-    result = set()
-
-    for pattern in patterns:
-
-        pools = []
-
-        for char in pattern:
-
-            if char == "C":
-                pools.append(CONSONANTS)
-            else:
-                pools.append(VOWELS)
-
-        for combination in product(*pools):
-
-            username = "".join(
-                combination
-            )
-
-            if is_beautiful(username):
-                result.add(username)
-
-    return list(result)
+    return (
+        MIN_USERNAME_LENGTH
+        <= length
+        <= MAX_USERNAME_LENGTH
+    )
 
 
-def generate_syllable_candidates(
-    length: int,
-) -> list[str]:
+# =========================================================
+# BASIC CANDIDATE CHECK
+# =========================================================
 
-    result = set()
+def is_valid_candidate(
+    username: str,
+) -> bool:
 
-    for first in SYLLABLES:
+    if not username:
+        return False
 
-        for second in SYLLABLES:
+    username = username.lower()
 
-            candidate = (
-                first + second
-            )
+    if not (
+        MIN_USERNAME_LENGTH
+        <= len(username)
+        <= MAX_USERNAME_LENGTH
+    ):
+        return False
 
-            if len(candidate) == length:
-                if is_beautiful(candidate):
-                    result.add(candidate)
+    if not username[0].isalpha():
+        return False
 
-    return list(result)
+    return all(
+        char in LETTERS
+        for char in username
+    )
 
 
-def generate_brand_candidates(
-    length: int,
-) -> list[str]:
-
-    result = set()
-
-    for base in BRAND_BASES:
-
-        if len(base) == length:
-            result.add(base)
-
-        if len(base) < length:
-
-            suffixes = [
-                "a",
-                "o",
-                "x",
-                "y",
-                "io",
-                "ai",
-            ]
-
-            for suffix in suffixes:
-
-                candidate = (
-                    base + suffix
-                )
-
-                if len(candidate) == length:
-                    if is_beautiful(candidate):
-                        result.add(candidate)
-
-    return list(result)
-
+# =========================================================
+# PATTERN GENERATOR
+# =========================================================
 
 def generate_candidates(
     length: int,
+    limit: int = 1000,
+) -> list[str]:
+
+    if not validate_length(length):
+        return []
+
+    if limit <= 0:
+        return []
+
+    result: list[str] = []
+
+    seen: set[str] = set()
+
+    # -----------------------------------------------------
+    # Для небольших username полный перебор невозможен:
+    #
+    # 5 букв = 11 881 376
+    # 6 букв = 308 915 776
+    #
+    # Поэтому используем набор красивых шаблонов.
+    # -----------------------------------------------------
+
+    patterns = [
+        # Повторы
+        "aabb",
+        "abab",
+        "abba",
+
+        # Чередование
+        "ababab",
+        "abcabc",
+        "abccba",
+
+        # Повтор одной буквы
+        "aaab",
+        "abaa",
+        "baaa",
+
+        # Последовательности
+        "abc",
+        "cba",
+
+        # Более коммерческие структуры
+        "aabbcc",
+        "abac",
+        "abca",
+        "acba",
+    ]
+
+    # -----------------------------------------------------
+    # Для каждой позиции создаём комбинации букв.
+    # -----------------------------------------------------
+
+    for pattern in patterns:
+
+        if len(result) >= limit:
+            break
+
+        if len(pattern) > length:
+            continue
+
+        # -------------------------------------------------
+        # Дополняем шаблон до нужной длины.
+        # -------------------------------------------------
+
+        template = pattern
+
+        while len(template) < length:
+            template += "ab"
+
+        template = template[:length]
+
+        # -------------------------------------------------
+        # Определяем уникальные символы шаблона.
+        # -------------------------------------------------
+
+        unique_symbols = []
+
+        for char in template:
+
+            if char not in unique_symbols:
+                unique_symbols.append(char)
+
+        # -------------------------------------------------
+        # Не больше 4 переменных букв на шаблон.
+        # -------------------------------------------------
+
+        unique_symbols = unique_symbols[:4]
+
+        for values in product(
+            LETTERS,
+            repeat=len(unique_symbols),
+        ):
+
+            mapping = dict(
+                zip(
+                    unique_symbols,
+                    values,
+                )
+            )
+
+            username = "".join(
+                mapping[char]
+                for char in template
+            )
+
+            if not is_valid_candidate(
+                username
+            ):
+                continue
+
+            if username in seen:
+                continue
+
+            seen.add(username)
+
+            result.append(
+                username
+            )
+
+            if len(result) >= limit:
+                return result
+
+    return result
+
+
+# =========================================================
+# RANDOM-LIKE CANDIDATES
+# =========================================================
+
+def generate_random_candidates(
+    length: int,
+    limit: int = 1000,
+) -> list[str]:
+
+    if not validate_length(length):
+        return []
+
+    if limit <= 0:
+        return []
+
+    result: list[str] = []
+
+    seen: set[str] = set()
+
+    # Используем детерминированные комбинации,
+    # чтобы одинаковый запрос давал стабильные
+    # результаты и не создавал огромную нагрузку.
+
+    for first in LETTERS:
+
+        if len(result) >= limit:
+            break
+
+        for second in LETTERS:
+
+            if len(result) >= limit:
+                break
+
+            prefix = first + second
+
+            remaining = length - 2
+
+            if remaining <= 0:
+                candidate = prefix
+
+                if (
+                    candidate not in seen
+                    and is_valid_candidate(candidate)
+                ):
+                    seen.add(candidate)
+                    result.append(candidate)
+
+                continue
+
+            for suffix in product(
+                LETTERS,
+                repeat=min(
+                    remaining,
+                    2,
+                ),
+            ):
+
+                candidate = (
+                    prefix
+                    + "".join(suffix)
+                )
+
+                # Если username ещё короткий,
+                # дополняем повторением шаблона.
+
+                while len(candidate) < length:
+                    candidate += (
+                        candidate[-1]
+                        if candidate
+                        else "a"
+                    )
+
+                candidate = candidate[:length]
+
+                if not is_valid_candidate(
+                    candidate
+                ):
+                    continue
+
+                if candidate in seen:
+                    continue
+
+                seen.add(candidate)
+
+                result.append(
+                    candidate
+                )
+
+                if len(result) >= limit:
+                    return result
+
+    return result
+
+
+# =========================================================
+# MASK GENERATOR
+# =========================================================
+
+def generate_from_mask(
+    mask: str,
     limit: int = 5000,
 ) -> list[str]:
 
-    candidates = set()
+    mask = mask.lower().strip()
 
-    candidates.update(
-        dictionary_candidates(length)
-    )
+    if not (
+        MIN_USERNAME_LENGTH
+        <= len(mask)
+        <= MAX_USERNAME_LENGTH
+    ):
+        return []
 
-    candidates.update(
-        generate_brand_candidates(length)
-    )
+    if not all(
+        char == "?"
+        or char in LETTERS
+        for char in mask
+    ):
+        return []
 
-    candidates.update(
-        generate_syllable_candidates(length)
-    )
+    if limit <= 0:
+        return []
 
-    candidates.update(
-        generate_pattern(length)
-    )
+    unknown_count = mask.count("?")
 
-    beautiful = [
-        username
-        for username in candidates
-        if is_beautiful(username)
+    if unknown_count == 0:
+
+        if is_valid_candidate(mask):
+            return [mask]
+
+        return []
+
+    # -----------------------------------------------------
+    # Без ограничения количество вариантов может
+    # взорваться:
+    #
+    # 5 ? = 11 881 376
+    # 6 ? = 308 915 776
+    #
+    # Поэтому разрешаем максимум 5 неизвестных.
+    # -----------------------------------------------------
+
+    if unknown_count > 5:
+        return []
+
+    positions = [
+        index
+        for index, char in enumerate(mask)
+        if char == "?"
     ]
 
-    ranked = rank_usernames(
-        beautiful
-    )
+    result: list[str] = []
 
-    return ranked[:limit]
+    seen: set[str] = set()
+
+    for letters in product(
+        LETTERS,
+        repeat=unknown_count,
+    ):
+
+        chars = list(mask)
+
+        for position, letter in zip(
+            positions,
+            letters,
+        ):
+            chars[position] = letter
+
+        username = "".join(chars)
+
+        if not is_valid_candidate(
+            username
+        ):
+            continue
+
+        if username in seen:
+            continue
+
+        seen.add(username)
+
+        result.append(
+            username
+        )
+
+        if len(result) >= limit:
+            break
+
+    return result
