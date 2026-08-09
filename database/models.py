@@ -659,3 +659,233 @@ class TaskCompletion(Base):
         nullable=False,
         index=True,
     )
+
+# =========================================================
+# CASE
+# =========================================================
+
+class Case(Base):
+    __tablename__ = "cases"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    description: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    price_stars: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    image_file_id: Mapped[Optional[str]] = mapped_column(
+        String(512),
+        nullable=True,
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+        index=True,
+    )
+
+    sort_order: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    created_by: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
+# =========================================================
+# CASE REWARD
+# =========================================================
+
+class CaseReward(Base):
+    __tablename__ = "case_rewards"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    case_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "cases.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    emoji: Mapped[str] = mapped_column(
+        String(16),
+        default="🎁",
+        nullable=False,
+    )
+
+    # stars
+    # balance
+    # premium
+    # searches
+    # traps
+    # discount
+
+    reward_type: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+    )
+
+    reward_amount: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    premium_days: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    chance: Mapped[float] = mapped_column(
+        nullable=False,
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
+
+    sort_order: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+
+
+# =========================================================
+# CASE OPEN
+# =========================================================
+
+class CaseOpen(Base):
+    __tablename__ = "case_opens"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    case_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "cases.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    reward_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "case_rewards.id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "users.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    telegram_id: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        index=True,
+    )
+
+    # =====================================================
+    # REWARD SNAPSHOT
+    # =====================================================
+
+    reward_type: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+
+    reward_title: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    reward_amount: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    premium_days: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    reward_chance: Mapped[float] = mapped_column(
+        nullable=False,
+    )
+
+    opened_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+        index=True,
+    )
