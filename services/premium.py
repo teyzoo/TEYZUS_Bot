@@ -1,6 +1,12 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
 
 from database.models import User
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def is_premium(
@@ -20,9 +26,13 @@ def is_premium(
             tzinfo=timezone.utc
         )
 
-    return premium_until > datetime.now(
-        timezone.utc
-    )
+    if premium_until <= utc_now():
+
+        user.premium_active = False
+
+        return False
+
+    return True
 
 
 def premium_status_text(
@@ -32,9 +42,12 @@ def premium_status_text(
     if is_premium(user):
 
         if user.premium_until:
+
+            premium_until = user.premium_until
+
             return (
                 "💎 Premium до "
-                f"{user.premium_until:%d.%m.%Y}"
+                f"{premium_until:%d.%m.%Y}"
             )
 
         return "💎 Premium активен"
