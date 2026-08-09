@@ -147,6 +147,17 @@ async def run_bot() -> None:
         profile_router
     )
 
+   dispatcher.include_router(
+
+    tasks_router
+
+)
+
+dispatcher.include_router(
+
+    admin_promo_router
+
+) 
     # =====================================================
     # CASES
     # =====================================================
