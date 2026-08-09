@@ -17,6 +17,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from database.base import Base
 
 
+# =========================================================
+# TIME
+# =========================================================
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -26,7 +30,6 @@ def utc_now() -> datetime:
 # =========================================================
 
 class User(Base):
-
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(
@@ -99,26 +102,6 @@ class User(Base):
         nullable=False,
     )
 
-    # =====================================================
-    # HUNTER BONUSES
-    # =====================================================
-
-    extra_searches: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    trap_balance: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
-        nullable=False,
-    )
-
-    # =====================================================
-    # REFERRALS
-    # =====================================================
-
     referral_code: Mapped[str] = mapped_column(
         String(64),
         unique=True,
@@ -132,10 +115,6 @@ class User(Base):
         index=True,
     )
 
-    # =====================================================
-    # SEARCH LIMIT
-    # =====================================================
-
     successful_searches_today: Mapped[int] = mapped_column(
         Integer,
         default=0,
@@ -146,10 +125,6 @@ class User(Base):
         String(16),
         nullable=True,
     )
-
-    # =====================================================
-    # SETTINGS
-    # =====================================================
 
     notifications_enabled: Mapped[bool] = mapped_column(
         Boolean,
@@ -162,10 +137,6 @@ class User(Base):
         default=False,
         nullable=False,
     )
-
-    # =====================================================
-    # DATES
-    # =====================================================
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -186,7 +157,6 @@ class User(Base):
 # =========================================================
 
 class PromoCode(Base):
-
     __tablename__ = "promo_codes"
 
     id: Mapped[int] = mapped_column(
@@ -257,6 +227,8 @@ class PromoCode(Base):
         nullable=False,
     )
 
+    # Telegram ID пользователей через запятую.
+    # None = доступ всем.
     allowed_user_ids: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
@@ -293,7 +265,6 @@ class PromoCode(Base):
 # =========================================================
 
 class PromoActivation(Base):
-
     __tablename__ = "promo_activations"
 
     id: Mapped[int] = mapped_column(
@@ -344,6 +315,273 @@ class PromoActivation(Base):
     )
 
     activated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+
+
+# =========================================================
+# TASK
+# =========================================================
+
+class Task(Base):
+    __tablename__ = "tasks"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    description: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    # -----------------------------------------------------
+    # TASK TYPE
+    #
+    # subscribe
+    # referral
+    # search
+    # purchase
+    # premium
+    # topup
+    # case
+    # custom
+    # -----------------------------------------------------
+
+    task_type: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+    )
+
+    # -----------------------------------------------------
+    # TARGET
+    #
+    # Примеры:
+    #
+    # subscribe -> @TEYZUS
+    # referral  -> 3
+    # search    -> 5
+    # purchase  -> 100
+    # case      -> 1
+    # -----------------------------------------------------
+
+    target_value: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    # -----------------------------------------------------
+    # REWARD
+    #
+    # premium
+    # searches
+    # traps
+    # balance_rub
+    # stars
+    # discount
+    # -----------------------------------------------------
+
+    reward_type: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+
+    reward_amount: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    # Если reward_type == premium
+    premium_days: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    # -----------------------------------------------------
+    # GLOBAL LIMIT
+    # -----------------------------------------------------
+
+    max_completions: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    completions_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    # -----------------------------------------------------
+    # USER FILTERS
+    # -----------------------------------------------------
+
+    only_new_users: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    only_premium: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    # -----------------------------------------------------
+    # DATES
+    # -----------------------------------------------------
+
+    starts_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    # -----------------------------------------------------
+    # REPEAT
+    # -----------------------------------------------------
+
+    repeatable: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    max_completions_per_user: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        default=1,
+        nullable=True,
+    )
+
+    # -----------------------------------------------------
+    # STATUS
+    # -----------------------------------------------------
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+        index=True,
+    )
+
+    # -----------------------------------------------------
+    # DISPLAY
+    # -----------------------------------------------------
+
+    sort_order: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    image_file_id: Mapped[Optional[str]] = mapped_column(
+        String(512),
+        nullable=True,
+    )
+
+    # -----------------------------------------------------
+    # OWNER
+    # -----------------------------------------------------
+
+    created_by: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
+# =========================================================
+# TASK COMPLETION
+# =========================================================
+
+class TaskCompletion(Base):
+    __tablename__ = "task_completions"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "tasks.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "users.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    telegram_id: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        index=True,
+    )
+
+    # -----------------------------------------------------
+    # SNAPSHOT OF REWARD
+    #
+    # Сохраняем награду на момент выполнения.
+    # Если Owner потом изменит задание,
+    # история не изменится.
+    # -----------------------------------------------------
+
+    reward_type: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+
+    reward_amount: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    premium_days: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    completed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
         nullable=False,
