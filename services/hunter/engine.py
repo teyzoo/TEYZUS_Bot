@@ -1,22 +1,17 @@
 from __future__ import annotations
-
 import asyncio
 from dataclasses import dataclass
-from enum import StrEnum
-
 from services.hunter.dictionary import (
     dictionary_candidates,
 )
 from services.hunter.filters import (
-    HunterFilters,
-    apply_filters,
+    is_beautiful_candidate,
 )
 from services.hunter.generator import (
     generate_candidates,
 )
 from services.hunter.masks import (
     generate_from_mask,
-    validate_mask,
 )
 from services.hunter.pricing import (
     estimate_price,
@@ -35,231 +30,116 @@ from services.hunter.telegram_checker import (
 from services.hunter.tme_checker import (
     TMeChecker,
 )
-
-
-class HunterMode(StrEnum):
-    SIX = "six"
-    FIVE = "five"
-    DICTIONARY = "dictionary"
-    MASK = "mask"
-    EXPENSIVE = "expensive"
-    POPULAR = "popular"
-
-
 @dataclass
 class HunterResult:
     username: str
-
     available: bool
-
     beauty_score: float
     readability: float
     rarity: float
     brand: float
     liquidity: float
-
     price_min: int
     price_max: int
-
     telegram_status: str
     tme_available: bool
-
-
 class HunterEngine:
-
     def __init__(self) -> None:
         self.telegram = TelegramChecker()
         self.tme = TMeChecker()
-
-        self._check_semaphore = asyncio.Semaphore(20)
-
+        self._check_semaphore = asyncio.Semaphore(
+            10
+        )
     async def close(self) -> None:
         await self.telegram.close()
-
-        close_tme = getattr(
-            self.tme,
-            "close",
-            None,
-        )
-
-        if close_tme is not None:
-            result = close_tme()
-
-            if asyncio.iscoroutine(result):
-                await result
-
     # =====================================================
-    # CANDIDATE GENERATION
+    # CANDIDATES
     # =====================================================
-
-    def generate_six(
-        self,
-        amount: int = 5000,
-    ) -> list[str]:
-
-        generated = generate_candidates(
-            length=6,
-            limit=amount,
-        )
-
-        return self._beautify(
-            generated,
-            premium=False,
-        )
-
-    def generate_five(
-        self,
-        amount: int = 10000,
-    ) -> list[str]:
-
-        generated = generate_candidates(
-            length=5,
-            limit=amount,
-        )
-
-        return self._beautify(
-            generated,
-            premium=True,
-        )
-
-    def generate_dictionary(
+    def prepare_candidates(
         self,
         length: int,
+        amount: int = 1000,
     ) -> list[str]:
-
-        generated = dictionary_candidates(
-            length
+        generated = generate_candidates(
+            length=length,
+            limit=max(
+                amount * 20,
+                1000,
+            ),
         )
-
-        return self._beautify(
-            generated,
-            premium=True,
-        )
-
-    def generate_mask(
-        self,
-        mask: str,
-        limit: int = 5000,
-    ) -> list[str]:
-
-        if not validate_mask(mask):
-            return []
-
-        generated = generate_from_mask(
-            mask=mask,
-            limit=limit,
-        )
-
-        return self._beautify(
-            generated,
-            premium=True,
-        )
-
-    # =====================================================
-    # FILTERING
-    # =====================================================
-
-    def _beautify(
-        self,
-        usernames: list[str],
-        premium: bool,
-    ) -> list[str]:
-
-        filters = HunterFilters(
-            min_beauty=7.0 if premium else 6.0,
-            min_readability=7.0 if premium else 6.0,
-            letters_only=True,
-            no_underscore=True,
-            no_digits=True,
-            max_length=32,
-        )
-
-        filtered = apply_filters(
-            usernames,
-            filters,
-        )
-
-        unique = list(
+        beautiful = [
+            username
+            for username in generated
+            if is_beautiful_candidate(
+                username
+            )
+        ]
+        beautiful = list(
             dict.fromkeys(
-                username.lower()
-                for username in filtered
+                beautiful
             )
         )
-
-        unique.sort(
+        beautiful.sort(
             key=lambda username: (
                 beauty_score(username),
                 readability_score(username),
+                brand_score(username),
                 liquidity_score(username),
             ),
             reverse=True,
         )
-
-        return unique
-
+        return beautiful[:amount]
     # =====================================================
     # CHECK ONE USERNAME
     # =====================================================
-
     async def check_candidate(
         self,
         username: str,
     ) -> HunterResult | None:
-
+        username = (
+            username
+            .lstrip("@")
+            .lower()
+            .strip()
+        )
         async with self._check_semaphore:
-
             telegram_status = (
                 await self.telegram.check(
                     username
                 )
             )
-
             if (
                 telegram_status
                 != TelegramUsernameStatus.AVAILABLE
             ):
                 return None
-
             tme_available = (
                 await self.tme.check(
                     username
                 )
             )
-
             if not tme_available:
                 return None
-
-            readability = round(
-                readability_score(username),
-                2,
+            readability = readability_score(
+                username
             )
-
-            rarity = round(
-                rarity_score(username),
-                2,
+            rarity = rarity_score(
+                username
             )
-
-            brand = round(
-                brand_score(username),
-                2,
+            brand = brand_score(
+                username
             )
-
-            liquidity = round(
-                liquidity_score(username),
-                2,
+            liquidity = liquidity_score(
+                username
             )
-
-            beauty = round(
-                beauty_score(username),
-                2,
+            beauty = beauty_score(
+                username
             )
-
             price_min, price_max = (
                 estimate_price(
                     username
                 )
             )
-
             return HunterResult(
                 username=username,
                 available=True,
@@ -275,200 +155,216 @@ class HunterEngine:
                 ),
                 tme_available=tme_available,
             )
-
     # =====================================================
-    # PARALLEL CHECK
+    # CHECK MANY
     # =====================================================
-
-    async def check_many(
+    async def check_candidates(
         self,
         candidates: list[str],
         amount: int,
     ) -> list[HunterResult]:
-
         if not candidates:
             return []
-
-        results = await asyncio.gather(
-            *(
-                self.check_candidate(
-                    username
-                )
-                for username in candidates
-            ),
-            return_exceptions=True,
-        )
-
-        valid: list[HunterResult] = []
-
-        for result in results:
-
-            if isinstance(
-                result,
-                HunterResult,
-            ):
-                valid.append(result)
-
-        valid.sort(
+        results: list[HunterResult] = []
+        batch_size = 10
+        for start in range(
+            0,
+            len(candidates),
+            batch_size,
+        ):
+            batch = candidates[
+                start:start + batch_size
+            ]
+            checked = await asyncio.gather(
+                *(
+                    self.check_candidate(
+                        username
+                    )
+                    for username in batch
+                ),
+                return_exceptions=True,
+            )
+            for result in checked:
+                if isinstance(
+                    result,
+                    HunterResult,
+                ):
+                    results.append(result)
+                if len(results) >= amount:
+                    break
+            if len(results) >= amount:
+                break
+        results.sort(
             key=lambda item: (
                 item.beauty_score,
+                item.readability,
                 item.liquidity,
                 item.brand,
                 item.price_max,
             ),
             reverse=True,
         )
-
-        return valid[:amount]
-
+        return results[:amount]
     # =====================================================
-    # STANDARD 6 LETTER SEARCH
+    # NORMAL SEARCH
     # =====================================================
-
     async def search(
+        self,
+        length: int,
+        amount: int = 10,
+    ) -> list[HunterResult]:
+        candidates = self.prepare_candidates(
+            length=length,
+            amount=max(
+                amount * 20,
+                200,
+            ),
+        )
+        return await self.check_candidates(
+            candidates=candidates,
+            amount=amount,
+        )
+    # =====================================================
+    # PREMIUM SEARCH
+    # =====================================================
+    async def premium(
+        self,
+        length: int,
+        amount: int = 10,
+    ) -> list[HunterResult]:
+        candidates = self.prepare_candidates(
+            length=length,
+            amount=max(
+                amount * 30,
+                300,
+            ),
+        )
+        return await self.check_candidates(
+            candidates=candidates,
+            amount=amount,
+        )
+    # =====================================================
+    # BEAUTIFUL
+    # =====================================================
+    async def beautiful(
         self,
         length: int = 6,
         amount: int = 10,
     ) -> list[HunterResult]:
-
-        if length == 5:
-            candidates = self.generate_five(
-                amount=max(
-                    amount * 100,
-                    5000,
-                )
-            )
-
-        else:
-            candidates = self.generate_six(
-                amount=max(
-                    amount * 100,
-                    5000,
-                )
-            )
-
-        return await self.check_many(
-            candidates=candidates,
+        return await self.search(
+            length=length,
             amount=amount,
         )
-
     # =====================================================
-    # PREMIUM 5 LETTER SEARCH
+    # DICTIONARY
     # =====================================================
-
-    async def premium(
-        self,
-        length: int = 5,
-        amount: int = 10,
-    ) -> list[HunterResult]:
-
-        if length != 5:
-            length = 5
-
-        candidates = self.generate_five(
-            amount=max(
-                amount * 100,
-                5000,
-            )
-        )
-
-        return await self.check_many(
-            candidates=candidates,
-            amount=amount,
-        )
-
-    # =====================================================
-    # DICTIONARY SEARCH
-    # =====================================================
-
     async def dictionary(
         self,
         length: int,
         amount: int = 10,
     ) -> list[HunterResult]:
-
-        candidates = self.generate_dictionary(
-            length=length
+        candidates = (
+            dictionary_candidates(
+                length
+            )
         )
-
-        return await self.check_many(
+        candidates = [
+            username
+            for username in candidates
+            if is_beautiful_candidate(
+                username
+            )
+        ]
+        candidates.sort(
+            key=lambda username: (
+                beauty_score(username),
+                brand_score(username),
+                liquidity_score(username),
+            ),
+            reverse=True,
+        )
+        return await self.check_candidates(
             candidates=candidates,
             amount=amount,
         )
-
     # =====================================================
-    # MASK SEARCH
+    # MASK
     # =====================================================
-
     async def mask(
         self,
         mask: str,
         amount: int = 10,
     ) -> list[HunterResult]:
-
-        candidates = self.generate_mask(
+        candidates = generate_from_mask(
             mask=mask,
             limit=max(
                 amount * 100,
-                1000,
+                500,
             ),
         )
-
-        return await self.check_many(
+        candidates = [
+            username
+            for username in candidates
+            if is_beautiful_candidate(
+                username
+            )
+        ]
+        candidates.sort(
+            key=lambda username: (
+                beauty_score(username),
+                readability_score(username),
+                brand_score(username),
+            ),
+            reverse=True,
+        )
+        return await self.check_candidates(
             candidates=candidates,
             amount=amount,
         )
-
     # =====================================================
     # POPULAR
     # =====================================================
-
     async def popular(
         self,
         amount: int = 10,
     ) -> list[HunterResult]:
-
-        candidates = self.generate_six(
-            amount=10000
+        candidates = self.prepare_candidates(
+            length=6,
+            amount=500,
         )
-
         candidates.sort(
             key=lambda username: (
                 brand_score(username),
-                readability_score(username),
                 beauty_score(username),
+                readability_score(username),
             ),
             reverse=True,
         )
-
-        return await self.check_many(
+        return await self.check_candidates(
             candidates=candidates,
             amount=amount,
         )
-
     # =====================================================
     # EXPENSIVE
     # =====================================================
-
     async def expensive(
         self,
         amount: int = 10,
     ) -> list[HunterResult]:
-
-        candidates = self.generate_six(
-            amount=10000
+        candidates = self.prepare_candidates(
+            length=6,
+            amount=1000,
         )
-
         candidates.sort(
             key=lambda username: (
-                estimate_price(username)[1],
                 liquidity_score(username),
+                rarity_score(username),
+                brand_score(username),
                 beauty_score(username),
             ),
             reverse=True,
         )
-
-        return await self.check_many(
+        return await self.check_candidates(
             candidates=candidates,
             amount=amount,
         )
