@@ -1,122 +1,169 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import (
-    ShopCartItem,
+    CartItem,
+    ShopCategory,
     ShopFavorite,
     ShopListing,
+    SellerProfile,
 )
+from database.repositories.base import BaseRepository
 
 
 class ShopRepository:
+    def __init__(
+        self,
+        session: AsyncSession,
+    ) -> None:
+        self.session = session
 
     # =====================================================
     # LISTINGS
     # =====================================================
 
-    @staticmethod
-    async def get_listings(
-        session: AsyncSession,
+    async def get_listing(
+        self,
+        listing_id: int,
+    ) -> ShopListing | None:
+
+        result = await self.session.execute(
+            select(ShopListing).where(
+                ShopListing.id == listing_id
+            )
+        )
+
+        return result.scalar_one_or_none()
+
+    async def get_listing_by_username(
+        self,
+        username: str,
+    ) -> ShopListing | None:
+
+        username = username.strip().lstrip("@").lower()
+
+        result = await self.session.execute(
+            select(ShopListing).where(
+                func.lower(
+                    ShopListing.username
+                ) == username
+            )
+        )
+
+        return result.scalar_one_or_none()
+
+    async def create_listing(
+        self,
+        **kwargs,
+    ) -> ShopListing:
+
+        listing = ShopListing(
+            **kwargs
+        )
+
+        self.session.add(listing)
+
+        await self.session.flush()
+
+        return listing
+
+    async def update_listing(
+        self,
+        listing: ShopListing,
+        **kwargs,
+    ) -> ShopListing:
+
+        for key, value in kwargs.items():
+
+            if hasattr(listing, key):
+                setattr(
+                    listing,
+                    key,
+                    value,
+                )
+
+        await self.session.flush()
+
+        return listing
+
+    async def delete_listing(
+        self,
+        listing: ShopListing,
+    ) -> None:
+
+        await self.session.delete(
+            listing
+        )
+
+        await self.session.flush()
+
+    async def list_listings(
+        self,
         *,
-        search: str = "",
-        category: str = "all",
+        search: str | None = None,
+        category_id: int | None = None,
+        status: str = "approved",
+        premium: bool | None = None,
         sort: str = "new",
         page: int = 1,
         per_page: int = 20,
-    ) -> tuple[
-        list[ShopListing],
-        int,
-    ]:
+    ) -> tuple[list[ShopListing], int]:
 
-        page = max(
-            page,
-            1,
+        conditions = [
+            ShopListing.status == status
+        ]
+
+        if search:
+            search_value = (
+                search
+                .strip()
+                .lstrip("@")
+            )
+
+            conditions.append(
+                ShopListing.username.ilike(
+                    f"%{search_value}%"
+                )
+            )
+
+        if category_id is not None:
+            conditions.append(
+                ShopListing.category_id
+                == category_id
+            )
+
+        if premium is not None:
+            conditions.append(
+                ShopListing.is_premium
+                == premium
+            )
+
+        count_query = (
+            select(
+                func.count(
+                    ShopListing.id
+                )
+            )
+            .where(*conditions)
         )
 
-        per_page = min(
-            max(
-                per_page,
-                1,
-            ),
-            100,
+        count_result = (
+            await self.session.execute(
+                count_query
+            )
+        )
+
+        total = (
+            count_result.scalar_one()
         )
 
         query = select(
             ShopListing
-        ).where(
-            ShopListing.is_active.is_(True),
-            ShopListing.is_moderated.is_(True),
-            ShopListing.status == "active",
-        )
+        ).where(*conditions)
 
-        # -------------------------------------------------
-        # SEARCH
-        # -------------------------------------------------
-
-        search = (
-            search
-            .strip()
-            .lstrip("@")
-        )
-
-        if search:
-
-            pattern = (
-                f"%{search}%"
-            )
-
-            query = query.where(
-                ShopListing.username.ilike(
-                    pattern
-                )
-                |
-                ShopListing.title.ilike(
-                    pattern
-                )
-                |
-                ShopListing.description.ilike(
-                    pattern
-                )
-            )
-
-        # -------------------------------------------------
-        # CATEGORY
-        # -------------------------------------------------
-
-        if category == "premium":
-
-            query = query.where(
-                ShopListing.is_premium.is_(True)
-            )
-
-        # -------------------------------------------------
-        # SORT
-        # -------------------------------------------------
-
-        if category == "cheap":
-
-            query = query.order_by(
-                ShopListing.price_rub.asc()
-            )
-
-        elif category == "popular":
-
-            query = query.order_by(
-                ShopListing.views.desc(),
-                ShopListing.created_at.desc(),
-            )
-
-        elif category == "new":
-
-            query = query.order_by(
-                ShopListing.created_at.desc()
-            )
-
-        elif sort == "price_asc":
+        if sort == "price_asc":
 
             query = query.order_by(
                 ShopListing.price_rub.asc()
@@ -131,8 +178,8 @@ class ShopRepository:
         elif sort == "popular":
 
             query = query.order_by(
-                ShopListing.views.desc(),
-                ShopListing.created_at.desc(),
+                ShopListing.views_count.desc(),
+                ShopListing.favorites_count.desc(),
             )
 
         else:
@@ -141,32 +188,8 @@ class ShopRepository:
                 ShopListing.created_at.desc()
             )
 
-        # -------------------------------------------------
-        # COUNT
-        # -------------------------------------------------
-
-        count_query = select(
-            func.count()
-        ).select_from(
-            query.order_by(None).subquery()
-        )
-
-        count_result = (
-            await session.execute(
-                count_query
-            )
-        )
-
-        total = (
-            count_result.scalar_one()
-        )
-
-        # -------------------------------------------------
-        # PAGINATION
-        # -------------------------------------------------
-
         offset = (
-            page - 1
+            max(page, 1) - 1
         ) * per_page
 
         query = query.offset(
@@ -175,164 +198,30 @@ class ShopRepository:
             per_page
         )
 
-        result = await session.execute(
+        result = await self.session.execute(
             query
         )
 
-        listings = list(
-            result.scalars().all()
-        )
-
         return (
-            listings,
+            list(
+                result.scalars().all()
+            ),
             total,
         )
 
     # =====================================================
-    # GET LISTING
+    # FAVORITES
     # =====================================================
 
-    @staticmethod
-    async def get_listing(
-        session: AsyncSession,
-        listing_id: int,
-    ) -> Optional[
-        ShopListing
-    ]:
-
-        result = await session.execute(
-            select(
-                ShopListing
-            ).where(
-                ShopListing.id
-                == listing_id
-            )
-        )
-
-        return (
-            result.scalar_one_or_none()
-        )
-
-    # =====================================================
-    # ACTIVE LISTING
-    # =====================================================
-
-    @staticmethod
-    async def get_active_listing(
-        session: AsyncSession,
-        listing_id: int,
-    ) -> Optional[
-        ShopListing
-    ]:
-
-        result = await session.execute(
-            select(
-                ShopListing
-            ).where(
-                ShopListing.id
-                == listing_id,
-                ShopListing.is_active.is_(True),
-                ShopListing.is_moderated.is_(True),
-                ShopListing.status
-                == "active",
-            )
-        )
-
-        return (
-            result.scalar_one_or_none()
-        )
-
-    # =====================================================
-    # CREATE LISTING
-    # =====================================================
-
-    @staticmethod
-    async def create_listing(
-        session: AsyncSession,
-        *,
-        seller_id: int,
-        username: str,
-        title: str,
-        description: Optional[str],
-        price_rub: int,
-        price_stars: Optional[int],
-        category: Optional[str],
-        is_premium: bool = False,
-    ) -> ShopListing:
-
-        listing = ShopListing(
-            seller_id=seller_id,
-            username=(
-                username
-                .strip()
-                .lstrip("@")
-            ),
-            title=title.strip(),
-            description=(
-                description.strip()
-                if description
-                else None
-            ),
-            price_rub=price_rub,
-            price_stars=price_stars,
-            category=category,
-            is_premium=is_premium,
-            is_verified=False,
-            is_active=False,
-            is_moderated=False,
-            status="pending",
-            views=0,
-            favorites_count=0,
-        )
-
-        session.add(
-            listing
-        )
-
-        await session.flush()
-
-        return listing
-
-    # =====================================================
-    # VIEWS
-    # =====================================================
-
-    @staticmethod
-    async def increment_views(
-        session: AsyncSession,
-        listing_id: int,
-    ) -> None:
-
-        listing = (
-            await ShopRepository.get_listing(
-                session,
-                listing_id,
-            )
-        )
-
-        if listing is None:
-            return
-
-        listing.views += 1
-
-        await session.flush()
-
-    # =====================================================
-    # FAVORITE CHECK
-    # =====================================================
-
-    @staticmethod
     async def is_favorite(
-        session: AsyncSession,
-        *,
+        self,
         user_id: int,
         listing_id: int,
     ) -> bool:
 
-        result = await session.execute(
-            select(
-                ShopFavorite.id
-            ).where(
+        result = await self.session.execute(
+            select(ShopFavorite.id)
+            .where(
                 ShopFavorite.user_id
                 == user_id,
                 ShopFavorite.listing_id
@@ -340,73 +229,60 @@ class ShopRepository:
             )
         )
 
-        return (
-            result.scalar_one_or_none()
-            is not None
-        )
+        return result.scalar_one_or_none() is not None
 
-    # =====================================================
-    # ADD FAVORITE
-    # =====================================================
-
-    @staticmethod
     async def add_favorite(
-        session: AsyncSession,
-        *,
+        self,
         user_id: int,
         listing_id: int,
-    ) -> bool:
+    ) -> ShopFavorite:
 
-        exists = (
-            await ShopRepository.is_favorite(
-                session,
-                user_id=user_id,
-                listing_id=listing_id,
+        existing = await self.session.execute(
+            select(ShopFavorite)
+            .where(
+                ShopFavorite.user_id
+                == user_id,
+                ShopFavorite.listing_id
+                == listing_id,
             )
         )
 
-        if exists:
-            return False
+        favorite = (
+            existing.scalar_one_or_none()
+        )
+
+        if favorite:
+            return favorite
 
         favorite = ShopFavorite(
             user_id=user_id,
             listing_id=listing_id,
         )
 
-        session.add(
+        self.session.add(
             favorite
         )
 
-        listing = (
-            await ShopRepository.get_listing(
-                session,
-                listing_id,
-            )
+        listing = await self.get_listing(
+            listing_id
         )
 
         if listing:
             listing.favorites_count += 1
 
-        await session.flush()
+        await self.session.flush()
 
-        return True
+        return favorite
 
-    # =====================================================
-    # REMOVE FAVORITE
-    # =====================================================
-
-    @staticmethod
     async def remove_favorite(
-        session: AsyncSession,
-        *,
+        self,
         user_id: int,
         listing_id: int,
-    ) -> bool:
+    ) -> None:
 
-        result = await session.execute(
-            select(
-                ShopFavorite
-            ).where(
+        result = await self.session.execute(
+            select(ShopFavorite)
+            .where(
                 ShopFavorite.user_id
                 == user_id,
                 ShopFavorite.listing_id
@@ -418,50 +294,41 @@ class ShopRepository:
             result.scalar_one_or_none()
         )
 
-        if favorite is None:
-            return False
+        if favorite:
 
-        await session.delete(
-            favorite
-        )
-
-        listing = (
-            await ShopRepository.get_listing(
-                session,
-                listing_id,
-            )
-        )
-
-        if listing:
-            listing.favorites_count = max(
-                0,
-                listing.favorites_count - 1,
+            await self.session.delete(
+                favorite
             )
 
-        await session.flush()
+            listing = await self.get_listing(
+                listing_id
+            )
 
-        return True
+            if listing:
+                listing.favorites_count = max(
+                    0,
+                    listing.favorites_count - 1,
+                )
+
+            await self.session.flush()
 
     # =====================================================
     # CART
     # =====================================================
 
-    @staticmethod
     async def get_cart(
-        session: AsyncSession,
+        self,
         user_id: int,
-    ) -> list[
-        ShopCartItem
-    ]:
+    ) -> list[CartItem]:
 
-        result = await session.execute(
-            select(
-                ShopCartItem
-            ).where(
-                ShopCartItem.user_id
+        result = await self.session.execute(
+            select(CartItem)
+            .where(
+                CartItem.user_id
                 == user_id
-            ).order_by(
-                ShopCartItem.created_at.desc()
+            )
+            .order_by(
+                CartItem.created_at.desc()
             )
         )
 
@@ -469,109 +336,148 @@ class ShopRepository:
             result.scalars().all()
         )
 
-    @staticmethod
-    async def cart_contains(
-        session: AsyncSession,
-        *,
+    async def add_to_cart(
+        self,
         user_id: int,
         listing_id: int,
-    ) -> bool:
+    ) -> CartItem:
 
-        result = await session.execute(
-            select(
-                ShopCartItem.id
-            ).where(
-                ShopCartItem.user_id
+        result = await self.session.execute(
+            select(CartItem)
+            .where(
+                CartItem.user_id
                 == user_id,
-                ShopCartItem.listing_id
+                CartItem.listing_id
                 == listing_id,
             )
         )
 
-        return (
+        existing = (
             result.scalar_one_or_none()
-            is not None
         )
 
-    @staticmethod
-    async def add_to_cart(
-        session: AsyncSession,
-        *,
-        user_id: int,
-        listing_id: int,
-    ) -> bool:
+        if existing:
+            return existing
 
-        exists = (
-            await ShopRepository.cart_contains(
-                session,
-                user_id=user_id,
-                listing_id=listing_id,
-            )
-        )
-
-        if exists:
-            return False
-
-        item = ShopCartItem(
+        item = CartItem(
             user_id=user_id,
             listing_id=listing_id,
         )
 
-        session.add(
-            item
-        )
+        self.session.add(item)
 
-        await session.flush()
+        await self.session.flush()
 
-        return True
+        return item
 
-    @staticmethod
     async def remove_from_cart(
-        session: AsyncSession,
-        *,
+        self,
         user_id: int,
         listing_id: int,
-    ) -> bool:
+    ) -> None:
 
-        result = await session.execute(
-            select(
-                ShopCartItem
-            ).where(
-                ShopCartItem.user_id
+        await self.session.execute(
+            delete(CartItem)
+            .where(
+                CartItem.user_id
                 == user_id,
-                ShopCartItem.listing_id
+                CartItem.listing_id
                 == listing_id,
             )
         )
 
-        item = (
-            result.scalar_one_or_none()
-        )
+        await self.session.flush()
 
-        if item is None:
-            return False
-
-        await session.delete(
-            item
-        )
-
-        await session.flush()
-
-        return True
-
-    @staticmethod
     async def clear_cart(
-        session: AsyncSession,
+        self,
         user_id: int,
     ) -> None:
 
-        await session.execute(
-            delete(
-                ShopCartItem
-            ).where(
-                ShopCartItem.user_id
+        await self.session.execute(
+            delete(CartItem)
+            .where(
+                CartItem.user_id
                 == user_id
             )
         )
 
-        await session.flush()
+        await self.session.flush()
+
+    # =====================================================
+    # CATEGORIES
+    # =====================================================
+
+    async def get_categories(
+        self,
+    ) -> list[ShopCategory]:
+
+        result = await self.session.execute(
+            select(ShopCategory)
+            .where(
+                ShopCategory.enabled
+                == True
+            )
+            .order_by(
+                ShopCategory.sort_order.asc(),
+                ShopCategory.id.asc(),
+            )
+        )
+
+        return list(
+            result.scalars().all()
+        )
+
+    async def create_category(
+        self,
+        **kwargs,
+    ) -> ShopCategory:
+
+        category = ShopCategory(
+            **kwargs
+        )
+
+        self.session.add(
+            category
+        )
+
+        await self.session.flush()
+
+        return category
+
+    # =====================================================
+    # SELLER
+    # =====================================================
+
+    async def get_seller_profile(
+        self,
+        user_id: int,
+    ) -> SellerProfile | None:
+
+        result = await self.session.execute(
+            select(SellerProfile)
+            .where(
+                SellerProfile.user_id
+                == user_id
+            )
+        )
+
+        return result.scalar_one_or_none()
+
+    async def create_seller_profile(
+        self,
+        user_id: int,
+        **kwargs,
+    ) -> SellerProfile:
+
+        profile = SellerProfile(
+            user_id=user_id,
+            **kwargs,
+        )
+
+        self.session.add(
+            profile
+        )
+
+        await self.session.flush()
+
+        return profile
