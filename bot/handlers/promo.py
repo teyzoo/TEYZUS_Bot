@@ -1,32 +1,32 @@
+from __future__ import annotations
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     Message,
 )
 
-from database.session import (
-    async_session_factory,
-)
-
-from database.repositories import (
-    get_user,
-)
-
-from services.promo import (
-    promo_service,
-)
-
-from bot.states.common import (
-    PromoState,
-)
+from database.repositories import get_or_create_user
+from database.session import async_session_factory
+from services.promo import promo_service
 
 
 router = Router()
 
 
 # =========================================================
-# START PROMO
+# STATE
+# =========================================================
+
+class PromoUserState(StatesGroup):
+
+    code = State()
+
+
+# =========================================================
+# PROMO BUTTON
 # =========================================================
 
 @router.callback_query(
@@ -40,12 +40,12 @@ async def promo_start(
     await state.clear()
 
     await state.set_state(
-        PromoState.code
+        PromoUserState.code
     )
 
     await callback.message.answer(
         "🎟 <b>Активация промокода</b>\n\n"
-        "Введи промокод:\n\n"
+        "Отправь промокод сообщением.\n\n"
         "Например:\n"
         "<code>TEYZUS2026</code>",
         parse_mode="HTML",
@@ -55,13 +55,13 @@ async def promo_start(
 
 
 # =========================================================
-# ENTER CODE
+# PROMO INPUT
 # =========================================================
 
 @router.message(
-    PromoState.code
+    PromoUserState.code
 )
-async def promo_enter_code(
+async def promo_input(
     message: Message,
     state: FSMContext,
 ):
@@ -75,32 +75,28 @@ async def promo_enter_code(
     if not code:
 
         await message.answer(
-            "❌ Введи промокод."
+            "❌ Промокод не может быть пустым."
         )
 
         return
 
     # -----------------------------------------------------
-    # GET USER
+    # USER
     # -----------------------------------------------------
 
     async with async_session_factory() as session:
 
-        user = await get_user(
+        user, _ = await get_or_create_user(
             session=session,
             telegram_id=message.from_user.id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name,
+            last_name=message.from_user.last_name,
+            language=(
+                message.from_user.language_code
+                or "ru"
+            ),
         )
-
-        if user is None:
-
-            await state.clear()
-
-            await message.answer(
-                "❌ Пользователь не найден.\n\n"
-                "Перезапусти бота через /start."
-            )
-
-            return
 
         # -------------------------------------------------
         # ACTIVATE
@@ -118,24 +114,3 @@ async def promo_enter_code(
         result.message,
         parse_mode="HTML",
     )
-
-
-# =========================================================
-# CANCEL
-# =========================================================
-
-@router.callback_query(
-    F.data == "promo_cancel"
-)
-async def promo_cancel(
-    callback: CallbackQuery,
-    state: FSMContext,
-):
-
-    await state.clear()
-
-    await callback.message.answer(
-        "❌ Активация промокода отменена."
-    )
-
-    await callback.answer()
